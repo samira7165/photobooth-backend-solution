@@ -4,15 +4,26 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useState } from 'react';
 import Cookies from 'js-cookie';
+import {
+  LayoutDashboard,
+  Megaphone,
+  Image as ImageIcon,
+  Bot,
+  Camera,
+  Users,
+  LogOut,
+  Menu,
+  X,
+} from 'lucide-react';
 import { hasRole } from '@/lib/utils';
 
 const NAV_ITEMS = [
-  { href: '/', label: 'Dashboard', icon: '📊' },
-  { href: '/campaigns', label: 'Campaigns', icon: '📋' },
-  { href: '/assets', label: 'Assets', icon: '🖼️' },
-  { href: '/providers', label: 'AI Providers', icon: '🤖' },
-  { href: '/submissions', label: 'Submissions', icon: '📸' },
-  { href: '/users', label: 'Users', icon: '👥', minRole: 'ADMIN' },
+  { href: '/', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/campaigns', label: 'Campaigns', icon: Megaphone },
+  { href: '/assets', label: 'Assets', icon: ImageIcon },
+  { href: '/providers', label: 'AI Providers', icon: Bot },
+  { href: '/submissions', label: 'Submissions', icon: Camera },
+  { href: '/users', label: 'Users', icon: Users, minRole: 'ADMIN' },
 ];
 
 export default function Sidebar({ user }) {
@@ -38,7 +49,7 @@ export default function Sidebar({ user }) {
         className="md:hidden fixed top-4 left-4 z-50 p-2 rounded-lg bg-[#111111] border border-white/10 text-white"
         aria-label="Toggle menu"
       >
-        {open ? '✕' : '☰'}
+        {open ? <X size={20} /> : <Menu size={20} />}
       </button>
 
       {/* Overlay on mobile */}
@@ -54,14 +65,15 @@ export default function Sidebar({ user }) {
           open ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
         }`}
       >
-        <div className="flex items-center gap-2 px-6 py-5 border-b border-white/10">
-          <span className="text-2xl">📸</span>
+        <div className="flex items-center gap-2.5 px-6 py-5 border-b border-white/10">
+          <Camera size={22} className="text-[#2563eb]" strokeWidth={2} />
           <span className="text-white font-semibold text-lg">XRI Photobooth</span>
         </div>
 
         <nav className="flex-1 px-3 py-4 space-y-1">
           {items.map((item) => {
             const active = isActive(item.href);
+            const Icon = item.icon;
             return (
               <Link
                 key={item.href}
@@ -73,7 +85,7 @@ export default function Sidebar({ user }) {
                     : 'text-gray-400 hover:bg-white/5 hover:text-white'
                 }`}
               >
-                <span className="text-base">{item.icon}</span>
+                <Icon size={18} strokeWidth={1.75} />
                 {item.label}
               </Link>
             );
@@ -85,7 +97,7 @@ export default function Sidebar({ user }) {
             onClick={handleLogout}
             className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-400 hover:bg-red-500/10 hover:text-red-400 transition-colors"
           >
-            <span className="text-base">🚪</span>
+            <LogOut size={18} strokeWidth={1.75} />
             Logout
           </button>
         </div>
