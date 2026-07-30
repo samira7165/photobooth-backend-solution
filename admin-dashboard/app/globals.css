@@ -1,0 +1,26 @@
+@import "tailwindcss";
+
+/* Admin dashboard is dark-only by design, not tied to OS preference. */
+:root {
+  --background: #0a0a0a;
+  --foreground: #ededed;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+}
+
+input[type='color'] {
+  padding: 0;
+  border: none;
+  background: none;
+}

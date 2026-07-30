@@ -9,8 +9,13 @@ import rateLimit from 'express-rate-limit';
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
-  // Security headers
-  app.use(helmet());
+  // Security headers. crossOriginResourcePolicy defaults to 'same-origin',
+  // which would make browsers block <img> loads of /uploads/... files from
+  // the admin dashboard (a different origin/port) even though CORS above
+  // allows it — CORP and CORS are separate checks. Since this API is
+  // intentionally consumed from other origins (the dashboard, the booth
+  // frontend), relax it to 'cross-origin' to match that trust model.
+  app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 
   // Serve uploaded asset files — e.g. http://localhost:3000/uploads/campaigns/...
   // Note: this is NOT affected by setGlobalPrefix() below, since static-asset
