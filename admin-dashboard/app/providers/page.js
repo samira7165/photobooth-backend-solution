@@ -6,31 +6,87 @@ import api from '@/lib/api';
 import DashboardLayout from '@/components/DashboardLayout';
 import Modal from '@/components/Modal';
 import useCurrentUser from '@/lib/useCurrentUser';
-import { hasRole, formatDate } from '@/lib/utils';
+import { hasRole, timeAgo, formatDate } from '@/lib/utils';
+
+const ERROR_THRESHOLD = 5;
+
+const SLOT_DEFS = [
+  { key: 'slot1', label: 'Slot 1', title: 'Primary API', identifier: 'slot-1-primary', border: 'border-l-[#2563eb]' },
+  { key: 'slot2', label: 'Slot 2', title: 'Fallback API', identifier: 'slot-2-fallback', border: 'border-l-gray-500' },
+];
+
+// The backend's ApiKey model has no "model" field (only providerId,
+// keyIdentifier, encryptedKey, usage/error counters). Since this is a
+// UI-only change, the model name is kept client-side in localStorage keyed
+// by the key's real ID — it's a display convenience, not backend state, and
+// won't follow the key if you log in from another browser/device.
+function modelStorageKey(keyId) {
+  return `photobooth-slot-model-${keyId}`;
+}
+
+function emptySlot() {
+  return {
+    keyId: null,
+    providerId: '',
+    originalProviderId: '',
+    model: '',
+    apiKey: '',
+    dailyLimit: '',
+    isActive: true,
+    usageToday: 0,
+    errorCount: 0,
+    lastUsedAt: null,
+    lastErrorAt: null,
+  };
+}
 
 export default function ProvidersPage() {
   const user = useCurrentUser();
   const canManage = hasRole(user?.role, 'SUPER_ADMIN');
 
   const [providers, setProviders] = useState([]);
-  const [campaigns, setCampaigns] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-
+  const [slots, setSlots] = useState({ slot1: emptySlot(), slot2: emptySlot() });
+  const [savingSlot, setSavingSlot] = useState(null);
   const [addProviderOpen, setAddProviderOpen] = useState(false);
-  const [addKeyFor, setAddKeyFor] = useState(null); // providerId
-  const [busy, setBusy] = useState(false);
 
   const load = async () => {
     setLoading(true);
     setError('');
     try {
-      const [providersRes, campaignsRes] = await Promise.all([
-        api.get('/ai-providers'),
-        api.get('/campaigns'),
-      ]);
-      setProviders(providersRes.data);
-      setCampaigns(campaignsRes.data);
+      const res = await api.get('/ai-providers');
+      setProviders(res.data);
+
+      // Slot 1/2 = the two active keys with the fewest errors, across all
+      // providers — flatten provider.apiKeys[] into one list to rank them.
+      const allActiveKeys = [];
+      for (const p of res.data) {
+        for (const k of p.apiKeys) {
+          if (k.isActive) allActiveKeys.push({ ...k, providerId: p.id });
+        }
+      }
+      allActiveKeys.sort((a, b) => a.errorCount - b.errorCount);
+
+      const next = { slot1: emptySlot(), slot2: emptySlot() };
+      SLOT_DEFS.forEach((def, idx) => {
+        const k = allActiveKeys[idx];
+        if (!k) return;
+        next[def.key] = {
+          keyId: k.id,
+          providerId: k.providerId,
+          originalProviderId: k.providerId,
+          model: (typeof window !== 'undefined' && localStorage.getItem(modelStorageKey(k.id))) || '',
+          apiKey: '',
+          dailyLimit: k.dailyLimit ?? '',
+          isActive: k.isActive,
+          usageToday: k.usageToday,
+          errorCount: k.errorCount,
+          lastUsedAt: k.lastUsedAt,
+          lastErrorAt: k.lastErrorAt,
+        };
+      });
+      setSlots(next);
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to load providers');
     } finally {
@@ -42,41 +98,67 @@ export default function ProvidersPage() {
     load();
   }, []);
 
-  const handleToggleActive = async (keyId, isActive) => {
+  const updateSlot = (slotKey, patch) => {
+    setSlots((s) => ({ ...s, [slotKey]: { ...s[slotKey], ...patch } }));
+  };
+
+  const handleSave = async (def) => {
+    const slot = slots[def.key];
+    if (!slot.providerId) {
+      alert('Select a provider first');
+      return;
+    }
+
+    // Changing the provider on an existing key isn't supported by the
+    // backend (providerId is immutable once created) — re-provision the
+    // slot with a brand-new key and retire the old one instead.
+    const providerChanged = slot.keyId && slot.originalProviderId !== slot.providerId;
+    const isNew = !slot.keyId || providerChanged;
+
+    if (isNew && slot.apiKey.trim().length < 4) {
+      alert('Enter an API key (at least 4 characters) to set up this slot');
+      return;
+    }
+
+    setSavingSlot(def.key);
     try {
-      await api.patch(`/ai-providers/keys/${keyId}`, { isActive: !isActive });
-      load();
+      const dailyLimitValue = slot.dailyLimit === '' ? null : Number(slot.dailyLimit);
+      let finalKeyId = slot.keyId;
+
+      if (isNew) {
+        if (slot.keyId && providerChanged) {
+          await api.patch(`/ai-providers/keys/${slot.keyId}`, { isActive: false });
+        }
+        const res = await api.post('/ai-providers/keys', {
+          providerId: slot.providerId,
+          keyIdentifier: def.identifier,
+          apiKey: slot.apiKey,
+          dailyLimit: dailyLimitValue ?? undefined,
+        });
+        finalKeyId = res.data.id;
+      } else {
+        if (slot.apiKey.trim()) {
+          await api.patch(`/ai-providers/keys/${slot.keyId}/rotate`, { apiKey: slot.apiKey });
+        }
+        await api.patch(`/ai-providers/keys/${slot.keyId}`, {
+          keyIdentifier: def.identifier,
+          dailyLimit: dailyLimitValue,
+        });
+      }
+
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(modelStorageKey(finalKeyId), slot.model || '');
+      }
+
+      await load();
     } catch (err) {
-      alert(err.response?.data?.message || 'Failed to update key');
+      alert(err.response?.data?.message || 'Failed to save slot');
+    } finally {
+      setSavingSlot(null);
     }
   };
 
-  const handleRotate = async (keyId) => {
-    const newKey = prompt('Enter the new API key value:');
-    if (!newKey) return;
-    setBusy(true);
-    try {
-      await api.patch(`/ai-providers/keys/${keyId}/rotate`, { apiKey: newKey });
-      load();
-    } catch (err) {
-      alert(err.response?.data?.message || 'Failed to rotate key');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleDeleteKey = async (keyId) => {
-    if (!confirm('Delete this API key? This cannot be undone.')) return;
-    setBusy(true);
-    try {
-      await api.delete(`/ai-providers/keys/${keyId}`);
-      load();
-    } catch (err) {
-      alert(err.response?.data?.message || 'Failed to delete key');
-    } finally {
-      setBusy(false);
-    }
-  };
+  const activityLog = buildActivityLog(slots, providers);
 
   return (
     <DashboardLayout title="AI Providers">
@@ -87,9 +169,9 @@ export default function ProvidersPage() {
         {canManage && (
           <button
             onClick={() => setAddProviderOpen(true)}
-            className="text-sm bg-[#2563eb] hover:bg-blue-700 text-white rounded-lg px-3 py-2 transition-colors"
+            className="text-xs text-gray-400 hover:text-white underline"
           >
-            + Add Provider
+            + Add a provider
           </button>
         )}
       </div>
@@ -103,104 +185,96 @@ export default function ProvidersPage() {
       {loading ? (
         <div className="text-gray-500 text-sm">Loading…</div>
       ) : (
-        <div className="space-y-6">
-          {providers.map((p) => (
-            <div key={p.id} className="bg-[#111111] border border-white/10 rounded-xl overflow-hidden">
-              <div className="p-5 flex items-center justify-between flex-wrap gap-3">
-                <div className="flex items-center gap-3">
-                  <span
-                    className={`w-3 h-3 rounded-full ${p.isHealthy ? 'bg-green-500' : 'bg-red-500'}`}
-                    title={p.isHealthy ? 'Healthy' : 'Unhealthy'}
-                  />
-                  <div>
-                    <div className="text-white font-semibold capitalize">{p.name}</div>
-                    <div className="text-xs text-gray-400">{p.baseUrl}</div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-6 text-sm text-gray-300">
-                  <div>
-                    <span className="text-gray-500">Avg response:</span>{' '}
-                    {p.avgResponseTime ? `${p.avgResponseTime}ms` : '—'}
-                  </div>
-                  <div>
-                    <span className="text-gray-500">Active keys:</span>{' '}
-                    {p.apiKeys.filter((k) => k.isActive).length}/{p.apiKeys.length}
-                  </div>
-                  {canManage && (
-                    <button
-                      onClick={() => setAddKeyFor(p.id)}
-                      className="text-xs bg-[#2563eb] hover:bg-blue-700 text-white rounded-lg px-2.5 py-1.5 transition-colors"
-                    >
-                      + Add Key
-                    </button>
-                  )}
-                </div>
-              </div>
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mb-8">
+            {SLOT_DEFS.map((def) => (
+              <SlotCard
+                key={def.key}
+                def={def}
+                slot={slots[def.key]}
+                providers={providers}
+                canManage={canManage}
+                saving={savingSlot === def.key}
+                onChange={(patch) => updateSlot(def.key, patch)}
+                onSave={() => handleSave(def)}
+              />
+            ))}
+          </div>
 
-              {p.apiKeys.length > 0 && (
-                <div className="overflow-x-auto border-t border-white/10">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="text-left text-gray-500 border-b border-white/10">
-                        <th className="px-5 py-2.5 font-medium">Key Identifier</th>
-                        <th className="px-5 py-2.5 font-medium">Active</th>
-                        <th className="px-5 py-2.5 font-medium">Usage Today / Limit</th>
-                        <th className="px-5 py-2.5 font-medium">Errors</th>
-                        <th className="px-5 py-2.5 font-medium">Last Used</th>
-                        {canManage && <th className="px-5 py-2.5 font-medium"></th>}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {p.apiKeys.map((k) => (
-                        <tr key={k.id} className="border-b border-white/5">
-                          <td className="px-5 py-2.5 text-white">{k.keyIdentifier}</td>
-                          <td className="px-5 py-2.5">
-                            <button
-                              disabled={!canManage}
-                              onClick={() => handleToggleActive(k.id, k.isActive)}
-                              className={`text-xs rounded-full px-2 py-0.5 border ${
-                                k.isActive
-                                  ? 'bg-green-500/20 text-green-300 border-green-500/40'
-                                  : 'bg-gray-500/20 text-gray-400 border-gray-500/40'
-                              } ${canManage ? 'cursor-pointer' : 'cursor-default'}`}
-                            >
-                              {k.isActive ? 'Active' : 'Inactive'}
-                            </button>
-                          </td>
-                          <td className="px-5 py-2.5 text-gray-300">
-                            {k.usageToday} / {k.dailyLimit ?? '∞'}
-                          </td>
-                          <td className={`px-5 py-2.5 ${k.errorCount >= 10 ? 'text-red-400' : 'text-gray-300'}`}>
-                            {k.errorCount}
-                          </td>
-                          <td className="px-5 py-2.5 text-gray-400">{formatDate(k.lastUsedAt)}</td>
-                          {canManage && (
-                            <td className="px-5 py-2.5 text-right space-x-2">
-                              <button
-                                onClick={() => handleRotate(k.id)}
-                                disabled={busy}
-                                className="text-xs text-[#2563eb] hover:underline"
-                              >
-                                Rotate
-                              </button>
-                              <button
-                                onClick={() => handleDeleteKey(k.id)}
-                                disabled={busy}
-                                className="text-xs text-red-400 hover:underline"
-                              >
-                                Delete
-                              </button>
-                            </td>
-                          )}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+          <div className="mb-8">
+            <h2 className="text-sm font-semibold text-white uppercase tracking-wide mb-3">Health Overview</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {SLOT_DEFS.map((def) => {
+                const slot = slots[def.key];
+                const limit = slot.dailyLimit === '' ? null : Number(slot.dailyLimit);
+                const pct = limit ? Math.min(100, (slot.usageToday / limit) * 100) : slot.usageToday > 0 ? 100 : 0;
+                return (
+                  <div key={def.key} className="bg-[#111111] border border-white/10 rounded-xl p-4">
+                    <div className="text-sm text-white mb-1.5">
+                      {def.label}: {slot.usageToday}/{limit ?? '∞'} used today
+                    </div>
+                    <div className="w-full h-2 bg-white/10 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full ${pct >= 100 ? 'bg-red-500' : 'bg-[#2563eb]'}`}
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                    {slot.errorCount > 0 && (
+                      <div className="text-red-400 text-xs mt-2">
+                        {def.label}: {slot.errorCount} error{slot.errorCount === 1 ? '' : 's'}
+                        {slot.lastErrorAt ? ` — last error ${timeAgo(slot.lastErrorAt)}` : ''}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
-          ))}
-        </div>
+          </div>
+
+          <div>
+            <h2 className="text-sm font-semibold text-white uppercase tracking-wide mb-3">Activity Log</h2>
+            <div className="bg-[#111111] border border-white/10 rounded-xl overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-gray-400 border-b border-white/10">
+                    <th className="px-5 py-2.5 font-medium">Slot</th>
+                    <th className="px-5 py-2.5 font-medium">Provider</th>
+                    <th className="px-5 py-2.5 font-medium">Status</th>
+                    <th className="px-5 py-2.5 font-medium">Time</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {activityLog.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} className="px-5 py-6 text-center text-gray-500">
+                        No recorded activity yet
+                      </td>
+                    </tr>
+                  ) : (
+                    activityLog.map((row, i) => (
+                      <tr key={i} className="border-b border-white/5 last:border-0">
+                        <td className="px-5 py-2.5 text-white">{row.slot}</td>
+                        <td className="px-5 py-2.5 text-gray-300 capitalize">{row.provider}</td>
+                        <td className="px-5 py-2.5">
+                          <span
+                            className={`text-xs rounded-full px-2 py-0.5 border ${
+                              row.status === 'success'
+                                ? 'bg-green-500/20 text-green-300 border-green-500/40'
+                                : 'bg-red-500/20 text-red-300 border-red-500/40'
+                            }`}
+                          >
+                            {row.status}
+                          </span>
+                        </td>
+                        <td className="px-5 py-2.5 text-gray-400">{formatDate(row.time)}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
       )}
 
       <AddProviderModal
@@ -211,18 +285,125 @@ export default function ProvidersPage() {
           load();
         }}
       />
-
-      <AddKeyModal
-        open={!!addKeyFor}
-        providerId={addKeyFor}
-        campaigns={campaigns}
-        onClose={() => setAddKeyFor(null)}
-        onSaved={() => {
-          setAddKeyFor(null);
-          load();
-        }}
-      />
     </DashboardLayout>
+  );
+}
+
+function buildActivityLog(slots, providers) {
+  const rows = [];
+  for (const def of SLOT_DEFS) {
+    const slot = slots[def.key];
+    const providerName = providers.find((p) => p.id === slot.providerId)?.name || '—';
+    if (slot.lastUsedAt) rows.push({ slot: def.label, provider: providerName, status: 'success', time: slot.lastUsedAt });
+    if (slot.lastErrorAt) rows.push({ slot: def.label, provider: providerName, status: 'fail', time: slot.lastErrorAt });
+  }
+  return rows.sort((a, b) => new Date(b.time) - new Date(a.time)).slice(0, 10);
+}
+
+function slotDotColor(slot) {
+  if (!slot.keyId) return 'bg-gray-600';
+  if (!slot.isActive) return 'bg-gray-500';
+  if (slot.errorCount > ERROR_THRESHOLD) return 'bg-red-500';
+  return 'bg-green-500';
+}
+
+function SlotCard({ def, slot, providers, canManage, saving, onChange, onSave }) {
+  const [showKey, setShowKey] = useState(false);
+
+  return (
+    <div className={`bg-[#111111] border border-white/10 border-l-4 ${def.border} rounded-xl p-5`}>
+      <div className="flex items-center justify-between mb-1">
+        <div>
+          <div className="text-white font-semibold">{def.label} — {def.title}</div>
+          {def.key === 'slot2' && (
+            <div className="text-xs text-gray-500">Used automatically if Slot 1 fails</div>
+          )}
+        </div>
+        <span
+          className={`w-3 h-3 rounded-full ${slotDotColor(slot)}`}
+          title={!slot.keyId ? 'Not configured' : !slot.isActive ? 'Inactive' : slot.errorCount > ERROR_THRESHOLD ? 'Erroring' : 'Healthy'}
+        />
+      </div>
+
+      <div className="text-xs text-gray-500 mb-4">Usage today: {slot.usageToday}</div>
+
+      <div className="space-y-3">
+        <div>
+          <label className="block text-xs font-medium text-gray-400 mb-1">Provider</label>
+          <select
+            disabled={!canManage}
+            value={slot.providerId}
+            onChange={(e) => onChange({ providerId: e.target.value })}
+            className="w-full bg-[#0a0a0a] border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#2563eb] disabled:opacity-60"
+          >
+            <option value="">Select provider…</option>
+            {providers.map((p) => (
+              <option key={p.id} value={p.id} className="capitalize">
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-gray-400 mb-1">Model Name</label>
+          <input
+            type="text"
+            disabled={!canManage}
+            value={slot.model}
+            onChange={(e) => onChange({ model: e.target.value })}
+            placeholder="gemini-2.5-flash-image"
+            className="w-full bg-[#0a0a0a] border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#2563eb] disabled:opacity-60"
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-gray-400 mb-1">
+            API Key {slot.keyId && <span className="text-gray-600">(leave blank to keep current)</span>}
+          </label>
+          <div className="relative">
+            <input
+              type={showKey ? 'text' : 'password'}
+              disabled={!canManage}
+              value={slot.apiKey}
+              onChange={(e) => onChange({ apiKey: e.target.value })}
+              placeholder={slot.keyId ? '••••••••' : 'Enter API key'}
+              className="w-full bg-[#0a0a0a] border border-white/10 rounded-lg px-3 py-2 pr-16 text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#2563eb] disabled:opacity-60"
+            />
+            <button
+              type="button"
+              onClick={() => setShowKey((v) => !v)}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-400 hover:text-white"
+            >
+              {showKey ? 'Hide' : 'Show'}
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-gray-400 mb-1">Daily Limit</label>
+          <input
+            type="number"
+            min={1}
+            disabled={!canManage}
+            value={slot.dailyLimit}
+            onChange={(e) => onChange({ dailyLimit: e.target.value })}
+            placeholder="Unlimited"
+            className="w-full bg-[#0a0a0a] border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#2563eb] disabled:opacity-60"
+          />
+        </div>
+
+        {canManage && (
+          <button
+            onClick={onSave}
+            disabled={saving}
+            className="w-full bg-[#2563eb] hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg px-4 py-2.5 transition-colors"
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -280,117 +461,6 @@ function AddProviderModal({ open, onClose, onSaved }) {
           className="w-full bg-[#2563eb] hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg px-4 py-2.5 transition-colors"
         >
           {saving ? 'Creating…' : 'Create Provider'}
-        </button>
-      </form>
-    </Modal>
-  );
-}
-
-function AddKeyModal({ open, providerId, campaigns, onClose, onSaved }) {
-  const [keyIdentifier, setKeyIdentifier] = useState('');
-  const [apiKey, setApiKey] = useState('');
-  const [dailyLimit, setDailyLimit] = useState('');
-  const [campaignIds, setCampaignIds] = useState([]);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
-
-  const toggleCampaign = (id) => {
-    setCampaignIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
-  };
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setSaving(true);
-    setError('');
-    try {
-      await api.post('/ai-providers/keys', {
-        providerId,
-        keyIdentifier,
-        apiKey,
-        dailyLimit: dailyLimit ? Number(dailyLimit) : undefined,
-        campaignIds: campaignIds.length > 0 ? campaignIds : undefined,
-      });
-      setKeyIdentifier('');
-      setApiKey('');
-      setDailyLimit('');
-      setCampaignIds([]);
-      onSaved();
-    } catch (err) {
-      setError(err.response?.data?.message || 'Failed to add key');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <Modal open={open} onClose={onClose} title="Add API Key">
-      <form onSubmit={handleSubmit} className="space-y-4">
-        {error && <div className="text-red-400 text-sm">{error}</div>}
-
-        <div>
-          <label className="block text-sm font-medium text-gray-300 mb-1.5">Key Identifier</label>
-          <input
-            type="text"
-            required
-            value={keyIdentifier}
-            onChange={(e) => setKeyIdentifier(e.target.value)}
-            placeholder="gemini-key-1"
-            className="w-full bg-[#0a0a0a] border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#2563eb]"
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-gray-300 mb-1.5">API Key</label>
-          <input
-            type="password"
-            required
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            className="w-full bg-[#0a0a0a] border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#2563eb]"
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-gray-300 mb-1.5">Daily Limit (optional)</label>
-          <input
-            type="number"
-            min={1}
-            value={dailyLimit}
-            onChange={(e) => setDailyLimit(e.target.value)}
-            placeholder="Unlimited"
-            className="w-full bg-[#0a0a0a] border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#2563eb]"
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-gray-300 mb-1.5">
-            Linked Campaigns (leave empty for a shared/global key)
-          </label>
-          <div className="max-h-40 overflow-y-auto border border-white/10 rounded-lg p-2 space-y-1">
-            {campaigns.length === 0 ? (
-              <div className="text-xs text-gray-500 px-1 py-1">No campaigns yet</div>
-            ) : (
-              campaigns.map((c) => (
-                <label key={c.id} className="flex items-center gap-2 text-sm text-gray-300 px-1 py-0.5">
-                  <input
-                    type="checkbox"
-                    checked={campaignIds.includes(c.id)}
-                    onChange={() => toggleCampaign(c.id)}
-                    className="rounded border-white/20 bg-[#0a0a0a] text-[#2563eb] focus:ring-[#2563eb]"
-                  />
-                  {c.name}
-                </label>
-              ))
-            )}
-          </div>
-        </div>
-
-        <button
-          type="submit"
-          disabled={saving}
-          className="w-full bg-[#2563eb] hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg px-4 py-2.5 transition-colors"
-        >
-          {saving ? 'Adding…' : 'Add Key'}
         </button>
       </form>
     </Modal>
