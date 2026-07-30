@@ -1,0 +1,288 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── ADMIN USERS ───
+
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+  OPERATOR
+  VIEWER
+}
+
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  passwordHash  String
+  name          String
+  role          Role      @default(OPERATOR)
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  auditLogs     AuditLog[]
+
+  @@map("users")
+}
+
+// ─── CAMPAIGNS ───
+
+enum CampaignStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  COMPLETED
+  ARCHIVED
+}
+
+model Campaign {
+  id              String          @id @default(uuid())
+  slug            String          @unique
+  name            String
+  status          CampaignStatus  @default(DRAFT)
+
+  // Processing mode
+  processingMode  String          @default("non-ai") // "ai", "non-ai", "both"
+
+  // All config as flexible JSON
+  brandConfig     Json?           // { logo, primaryColor, secondaryColor, backgroundColor, fontFamily }
+  aiConfig        Json?           // { provider, model, prompt, strength, fallbackProviders, allowCustomPrompt, referenceImage, aiBackgroundGeneration, aiBackgroundPrompt }
+  photoSettings   Json?           // { orientation, outputWidth, outputHeight }
+  backgroundConfig Json?          // { removal, allowCustomUpload, defaultBackgroundId }
+  frameConfig     Json?           // { enabled, defaultFrameId }
+  propConfig      Json?           // { enabled }
+  qrConfig        Json?           // { enabled, position: {x,y}, size, contentType, customContent }
+  textConfig      Json?           // { enabled, content, position: {x,y}, font, color, size, allowCustomText }
+  collectFields   Json            @default("[\"name\", \"phone\"]") // which user info fields to collect
+  outputMode      String          @default("qr") // "qr", "download", "print", "sms", "email"
+
+  // Schedule & Limits
+  startDate       DateTime?
+  endDate         DateTime?
+  maxSubmissions  Int?
+  dailyBudget     Float?
+  totalBudget     Float?
+
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  // Relations
+  submissions     Submission[]
+  backgrounds     Background[]
+  frames          Frame[]
+  props           Prop[]
+  apiKeyLinks     CampaignApiKey[]
+
+  @@index([slug])
+  @@index([status])
+  @@map("campaigns")
+}
+
+// ─── BACKGROUNDS ───
+
+model Background {
+  id            String    @id @default(uuid())
+  campaignId    String
+  name          String
+  imageUrl      String    // S3 key
+  thumbnailUrl  String?   // S3 key for preview
+  sortOrder     Int       @default(0)
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+
+  campaign      Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId])
+  @@map("backgrounds")
+}
+
+// ─── FRAMES ───
+
+model Frame {
+  id            String    @id @default(uuid())
+  campaignId    String
+  name          String
+  imageUrl      String    // S3 key (PNG with transparency)
+  thumbnailUrl  String?
+  sortOrder     Int       @default(0)
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+
+  campaign      Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId])
+  @@map("frames")
+}
+
+// ─── PROPS ───
+
+enum PropPosition {
+  HEAD_TOP      // hat, crown, tiara
+  FACE_EYES     // glasses, sunglasses
+  FACE_FULL     // mask
+  HEAD_HAIR     // wig
+  BODY_NECK     // necklace, bow tie
+  HAND_HELD     // sign, board
+}
+
+model Prop {
+  id            String        @id @default(uuid())
+  campaignId    String
+  name          String
+  imageUrl      String        // S3 key (PNG with transparency)
+  thumbnailUrl  String?
+  positionType  PropPosition  @default(HEAD_TOP)
+  sortOrder     Int           @default(0)
+  isActive      Boolean       @default(true)
+  createdAt     DateTime      @default(now())
+
+  campaign      Campaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId])
+  @@map("props")
+}
+
+// ─── SUBMISSIONS ───
+
+enum SubmissionStatus {
+  UPLOADED
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model Submission {
+  id              String            @id @default(uuid())
+  campaignId      String
+
+  // User info (depends on campaign collectFields)
+  userName        String?
+  userEmail       String?
+  userPhone       String?
+  sessionId       String?
+
+  // Photos
+  originalUrl     String            // S3 key for uploaded photo
+  resultUrl       String?           // S3 key for processed photo
+  thumbnailUrl    String?           // S3 key for thumbnail
+
+  // Processing
+  status          SubmissionStatus  @default(UPLOADED)
+  mode            String            @default("non-ai") // "ai" or "non-ai"
+  backgroundUsed  String?           // background ID or "custom" or "ai-generated"
+  frameUsed       String?           // frame ID or null
+  propsUsed       Json?             // array of prop IDs used
+  orientation     String?           // "portrait" or "landscape"
+
+  // AI specific
+  styleUsed       String?
+  promptUsed      String?           @db.Text
+  aiProvider      String?
+  aiModel         String?
+  apiKeyUsed      String?           // key identifier (NOT actual key)
+  tokensUsed      Int?
+  costEstimate    Float?
+  referenceImageUrl String?
+
+  // Job tracking
+  processingTime  Int?              // milliseconds
+  retryCount      Int               @default(0)
+  errorMessage    String?           @db.Text
+
+  // Output
+  qrCodeUrl       String?
+  downloadCount   Int               @default(0)
+
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  campaign        Campaign          @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("submissions")
+}
+
+// ─── AI PROVIDERS ───
+
+model AiProvider {
+  id              String    @id @default(uuid())
+  name            String    @unique // "gemini", "dalle", "replicate"
+  baseUrl         String
+  isHealthy       Boolean   @default(true)
+  lastHealthCheck DateTime?
+  avgResponseTime Int?      // milliseconds
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  apiKeys         ApiKey[]
+
+  @@map("ai_providers")
+}
+
+// ─── API KEYS ───
+
+model ApiKey {
+  id              String    @id @default(uuid())
+  providerId      String
+  keyIdentifier   String    // human-readable: "gemini-key-1"
+  encryptedKey    String    @db.Text // actual API key (encrypt in production)
+  isActive        Boolean   @default(true)
+  usageToday      Int       @default(0)
+  usageTotal      Int       @default(0)
+  lastUsedAt      DateTime?
+  errorCount      Int       @default(0)
+  lastErrorAt     DateTime?
+  dailyLimit      Int?      // max requests per day
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  provider        AiProvider     @relation(fields: [providerId], references: [id])
+  campaignLinks   CampaignApiKey[]
+
+  @@index([providerId])
+  @@map("api_keys")
+}
+
+// ─── CAMPAIGN-API KEY LINKS ───
+// null campaignId = shared key available to all campaigns
+
+model CampaignApiKey {
+  id          String    @id @default(uuid())
+  campaignId  String?
+  apiKeyId    String
+
+  campaign    Campaign? @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  apiKey      ApiKey    @relation(fields: [apiKeyId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, apiKeyId])
+  @@map("campaign_api_keys")
+}
+
+// ─── AUDIT LOG ───
+
+model AuditLog {
+  id          String    @id @default(uuid())
+  userId      String
+  action      String    // "campaign.created", "campaign.updated", "user.login"
+  entityType  String?   // "campaign", "user", "submission"
+  entityId    String?
+  metadata    Json?
+  ipAddress   String?
+  createdAt   DateTime  @default(now())
+
+  user        User      @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}

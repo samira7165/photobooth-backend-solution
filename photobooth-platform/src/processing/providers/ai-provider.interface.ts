@@ -1,0 +1,2 @@
+export interface AiProviderResult { imageBuffer: Buffer; metadata: { model: string; processingTimeMs: number; promptUsed: string }; }
+export interface AiProvider { name: string; generate(input: { photoUrl: string; prompt: string }): Promise<AiProviderResult>; }

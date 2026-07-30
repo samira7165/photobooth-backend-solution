@@ -1,0 +1,1 @@
+// BullMQ worker — picks up jobs and processes photos
