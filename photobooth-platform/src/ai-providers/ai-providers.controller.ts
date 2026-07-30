@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Delete, Body, Param, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
 import { AiProvidersService } from './ai-providers.service';
 import { CreateProviderDto } from './dto/create-provider.dto';
 import { CreateApiKeyDto } from './dto/create-api-key.dto';
@@ -33,6 +33,12 @@ export class AiProvidersController {
   @Roles('ADMIN')
   async getHealth() {
     return this.aiProvidersService.getProviderHealth();
+  }
+
+  @Get('activity')
+  @Roles('ADMIN')
+  async getActivity(@Query('limit') limit?: string) {
+    return this.aiProvidersService.getRecentActivity(limit ? parseInt(limit, 10) : 10);
   }
 
   // ─── API KEYS ───

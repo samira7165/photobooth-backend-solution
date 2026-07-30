@@ -22,7 +22,7 @@ export class AiProvidersService {
     return this.prisma.aiProvider.findMany({
       include: {
         apiKeys: {
-          select: { id: true, keyIdentifier: true, isActive: true, usageToday: true, usageTotal: true, dailyLimit: true, errorCount: true, lastUsedAt: true, lastErrorAt: true },
+          select: { id: true, keyIdentifier: true, model: true, isActive: true, usageToday: true, usageTotal: true, dailyLimit: true, errorCount: true, lastUsedAt: true, lastErrorAt: true },
         },
       },
       orderBy: { name: 'asc' },
@@ -60,7 +60,7 @@ export class AiProvidersService {
 
   // ─── API KEYS ───
 
-  async createApiKey(data: { providerId: string; keyIdentifier: string; apiKey: string; dailyLimit?: number; campaignIds?: string[] }) {
+  async createApiKey(data: { providerId: string; keyIdentifier: string; apiKey: string; model?: string; dailyLimit?: number; campaignIds?: string[] }) {
     // Verify provider exists
     const provider = await this.prisma.aiProvider.findUnique({ where: { id: data.providerId } });
     if (!provider) throw new NotFoundException('Provider not found');
@@ -72,6 +72,7 @@ export class AiProvidersService {
       data: {
         providerId: data.providerId,
         keyIdentifier: data.keyIdentifier,
+        model: data.model || null,
         encryptedKey,
         dailyLimit: data.dailyLimit || null,
       },
@@ -94,6 +95,7 @@ export class AiProvidersService {
     return {
       id: apiKey.id,
       keyIdentifier: apiKey.keyIdentifier,
+      model: apiKey.model,
       providerId: apiKey.providerId,
       isActive: apiKey.isActive,
       dailyLimit: apiKey.dailyLimit,
@@ -101,14 +103,14 @@ export class AiProvidersService {
     };
   }
 
-  async updateApiKey(id: string, data: { keyIdentifier?: string; isActive?: boolean; dailyLimit?: number }) {
+  async updateApiKey(id: string, data: { keyIdentifier?: string; model?: string; isActive?: boolean; dailyLimit?: number }) {
     const key = await this.prisma.apiKey.findUnique({ where: { id } });
     if (!key) throw new NotFoundException('API key not found');
 
     return this.prisma.apiKey.update({
       where: { id },
       data,
-      select: { id: true, keyIdentifier: true, isActive: true, dailyLimit: true, usageToday: true, usageTotal: true },
+      select: { id: true, keyIdentifier: true, model: true, isActive: true, dailyLimit: true, usageToday: true, usageTotal: true },
     });
   }
 
@@ -225,8 +227,11 @@ export class AiProvidersService {
   // Called after every AI provider call so getAvailableKey()'s filters
   // (errorCount < 10, usageToday < dailyLimit) stay accurate. A success
   // resets errorCount to 0, so one bad request doesn't permanently penalize
-  // an otherwise-healthy key.
-  async recordKeyUsage(keyId: string, success: boolean, responseTime?: number) {
+  // an otherwise-healthy key. Also writes an ApiKeyUsageLog row — the
+  // aggregate counters on ApiKey (usageToday, errorCount, lastUsedAt, ...)
+  // are a rolling summary; this log is the actual per-call history behind
+  // AiProvidersController's GET /ai-providers/activity.
+  async recordKeyUsage(keyId: string, success: boolean, responseTime?: number, errorMessage?: string) {
     if (success) {
       await this.prisma.apiKey.update({
         where: { id: keyId },
@@ -247,6 +252,10 @@ export class AiProvidersService {
       });
     }
 
+    await this.prisma.apiKeyUsageLog.create({
+      data: { apiKeyId: keyId, success, responseTime, errorMessage },
+    });
+
     // Update provider avg response time
     if (responseTime) {
       const key = await this.prisma.apiKey.findUnique({ where: { id: keyId }, select: { providerId: true } });
@@ -260,6 +269,33 @@ export class AiProvidersService {
         });
       }
     }
+  }
+
+  // Recent per-call history across all keys, newest first — the real data
+  // behind the dashboard's Activity Log (previously synthesized from just
+  // lastUsedAt/lastErrorAt, which can only ever represent one success and
+  // one failure per key).
+  async getRecentActivity(limit = 10) {
+    const logs = await this.prisma.apiKeyUsageLog.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      include: {
+        apiKey: {
+          select: { id: true, keyIdentifier: true, provider: { select: { name: true } } },
+        },
+      },
+    });
+
+    return logs.map((log) => ({
+      id: log.id,
+      apiKeyId: log.apiKeyId,
+      keyIdentifier: log.apiKey.keyIdentifier,
+      providerName: log.apiKey.provider.name,
+      success: log.success,
+      responseTime: log.responseTime,
+      errorMessage: log.errorMessage,
+      createdAt: log.createdAt,
+    }));
   }
 
   // ─── FAILOVER KEY SELECTION ───

@@ -15,15 +15,6 @@ const SLOT_DEFS = [
   { key: 'slot2', label: 'Slot 2', title: 'Fallback API', identifier: 'slot-2-fallback', border: 'border-l-gray-500' },
 ];
 
-// The backend's ApiKey model has no "model" field (only providerId,
-// keyIdentifier, encryptedKey, usage/error counters). Since this is a
-// UI-only change, the model name is kept client-side in localStorage keyed
-// by the key's real ID — it's a display convenience, not backend state, and
-// won't follow the key if you log in from another browser/device.
-function modelStorageKey(keyId) {
-  return `photobooth-slot-model-${keyId}`;
-}
-
 function emptySlot() {
   return {
     keyId: null,
@@ -50,18 +41,23 @@ export default function ProvidersPage() {
   const [slots, setSlots] = useState({ slot1: emptySlot(), slot2: emptySlot() });
   const [savingSlot, setSavingSlot] = useState(null);
   const [addProviderOpen, setAddProviderOpen] = useState(false);
+  const [activityLog, setActivityLog] = useState([]);
 
   const load = async () => {
     setLoading(true);
     setError('');
     try {
-      const res = await api.get('/ai-providers');
-      setProviders(res.data);
+      const [providersRes, activityRes] = await Promise.all([
+        api.get('/ai-providers'),
+        api.get('/ai-providers/activity', { params: { limit: 10 } }),
+      ]);
+      setProviders(providersRes.data);
+      setActivityLog(activityRes.data);
 
       // Slot 1/2 = the two active keys with the fewest errors, across all
       // providers — flatten provider.apiKeys[] into one list to rank them.
       const allActiveKeys = [];
-      for (const p of res.data) {
+      for (const p of providersRes.data) {
         for (const k of p.apiKeys) {
           if (k.isActive) allActiveKeys.push({ ...k, providerId: p.id });
         }
@@ -76,7 +72,7 @@ export default function ProvidersPage() {
           keyId: k.id,
           providerId: k.providerId,
           originalProviderId: k.providerId,
-          model: (typeof window !== 'undefined' && localStorage.getItem(modelStorageKey(k.id))) || '',
+          model: k.model || '',
           apiKey: '',
           dailyLimit: k.dailyLimit ?? '',
           isActive: k.isActive,
@@ -123,31 +119,27 @@ export default function ProvidersPage() {
     setSavingSlot(def.key);
     try {
       const dailyLimitValue = slot.dailyLimit === '' ? null : Number(slot.dailyLimit);
-      let finalKeyId = slot.keyId;
 
       if (isNew) {
         if (slot.keyId && providerChanged) {
           await api.patch(`/ai-providers/keys/${slot.keyId}`, { isActive: false });
         }
-        const res = await api.post('/ai-providers/keys', {
+        await api.post('/ai-providers/keys', {
           providerId: slot.providerId,
           keyIdentifier: def.identifier,
           apiKey: slot.apiKey,
+          model: slot.model || undefined,
           dailyLimit: dailyLimitValue ?? undefined,
         });
-        finalKeyId = res.data.id;
       } else {
         if (slot.apiKey.trim()) {
           await api.patch(`/ai-providers/keys/${slot.keyId}/rotate`, { apiKey: slot.apiKey });
         }
         await api.patch(`/ai-providers/keys/${slot.keyId}`, {
           keyIdentifier: def.identifier,
+          model: slot.model || null,
           dailyLimit: dailyLimitValue,
         });
-      }
-
-      if (typeof window !== 'undefined') {
-        localStorage.setItem(modelStorageKey(finalKeyId), slot.model || '');
       }
 
       await load();
@@ -158,7 +150,15 @@ export default function ProvidersPage() {
     }
   };
 
-  const activityLog = buildActivityLog(slots, providers);
+  // Label rows against the current Slot 1/Slot 2 if the log entry's key still
+  // occupies one of them; a key that's since been rotated out of a slot (or
+  // was never in one) falls back to its own keyIdentifier so the row is
+  // still meaningful instead of silently dropped.
+  const slotLabelFor = (apiKeyId) => {
+    if (apiKeyId === slots.slot1.keyId) return 'Slot 1';
+    if (apiKeyId === slots.slot2.keyId) return 'Slot 2';
+    return null;
+  };
 
   return (
     <DashboardLayout title="AI Providers">
@@ -247,26 +247,32 @@ export default function ProvidersPage() {
                   {activityLog.length === 0 ? (
                     <tr>
                       <td colSpan={4} className="px-5 py-6 text-center text-gray-500">
-                        No recorded activity yet
+                        No recorded activity yet — this fills in once the processing pipeline
+                        starts making real AI provider calls.
                       </td>
                     </tr>
                   ) : (
-                    activityLog.map((row, i) => (
-                      <tr key={i} className="border-b border-white/5 last:border-0">
-                        <td className="px-5 py-2.5 text-white">{row.slot}</td>
-                        <td className="px-5 py-2.5 text-gray-300 capitalize">{row.provider}</td>
+                    activityLog.map((row) => (
+                      <tr key={row.id} className="border-b border-white/5 last:border-0">
+                        <td className="px-5 py-2.5 text-white">
+                          {slotLabelFor(row.apiKeyId) || (
+                            <span className="text-gray-500 font-mono text-xs">{row.keyIdentifier}</span>
+                          )}
+                        </td>
+                        <td className="px-5 py-2.5 text-gray-300 capitalize">{row.providerName}</td>
                         <td className="px-5 py-2.5">
                           <span
                             className={`text-xs rounded-full px-2 py-0.5 border ${
-                              row.status === 'success'
+                              row.success
                                 ? 'bg-green-500/20 text-green-300 border-green-500/40'
                                 : 'bg-red-500/20 text-red-300 border-red-500/40'
                             }`}
+                            title={row.errorMessage || undefined}
                           >
-                            {row.status}
+                            {row.success ? 'success' : 'fail'}
                           </span>
                         </td>
-                        <td className="px-5 py-2.5 text-gray-400">{formatDate(row.time)}</td>
+                        <td className="px-5 py-2.5 text-gray-400">{formatDate(row.createdAt)}</td>
                       </tr>
                     ))
                   )}
@@ -287,17 +293,6 @@ export default function ProvidersPage() {
       />
     </DashboardLayout>
   );
-}
-
-function buildActivityLog(slots, providers) {
-  const rows = [];
-  for (const def of SLOT_DEFS) {
-    const slot = slots[def.key];
-    const providerName = providers.find((p) => p.id === slot.providerId)?.name || '—';
-    if (slot.lastUsedAt) rows.push({ slot: def.label, provider: providerName, status: 'success', time: slot.lastUsedAt });
-    if (slot.lastErrorAt) rows.push({ slot: def.label, provider: providerName, status: 'fail', time: slot.lastErrorAt });
-  }
-  return rows.sort((a, b) => new Date(b.time) - new Date(a.time)).slice(0, 10);
 }
 
 function slotDotColor(slot) {

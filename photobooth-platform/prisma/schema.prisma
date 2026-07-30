@@ -234,6 +234,7 @@ model ApiKey {
   id              String    @id @default(uuid())
   providerId      String
   keyIdentifier   String    // human-readable: "gemini-key-1"
+  model           String?   // e.g. "gemini-2.5-flash-image" — which model this key calls
   encryptedKey    String    @db.Text // actual API key (encrypt in production)
   isActive        Boolean   @default(true)
   usageToday      Int       @default(0)
@@ -247,9 +248,29 @@ model ApiKey {
 
   provider        AiProvider     @relation(fields: [providerId], references: [id])
   campaignLinks   CampaignApiKey[]
+  usageLogs       ApiKeyUsageLog[]
 
   @@index([providerId])
   @@map("api_keys")
+}
+
+// ─── API KEY USAGE LOG ───
+// One row per recordKeyUsage() call — the real per-call history that
+// ApiKey's usageToday/errorCount/lastUsedAt/lastErrorAt counters summarize.
+
+model ApiKeyUsageLog {
+  id            String    @id @default(uuid())
+  apiKeyId      String
+  success       Boolean
+  responseTime  Int?      // milliseconds
+  errorMessage  String?   @db.Text
+  createdAt     DateTime  @default(now())
+
+  apiKey        ApiKey    @relation(fields: [apiKeyId], references: [id], onDelete: Cascade)
+
+  @@index([apiKeyId])
+  @@index([createdAt])
+  @@map("api_key_usage_logs")
 }
 
 // ─── CAMPAIGN-API KEY LINKS ───
