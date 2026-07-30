@@ -5,6 +5,11 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import * as path from 'path';
 import { v4 as uuid } from 'uuid';
 
+// Thin wrapper around the S3 client. Registered as @Global() in
+// storage.module.ts, so any module can inject this without importing
+// StorageModule. Callers (AssetsService, SubmissionsService) check
+// isConfigured() first and fall back to local disk when it's false, so
+// development works without real AWS credentials.
 @Injectable()
 export class StorageService {
   private s3: S3Client;

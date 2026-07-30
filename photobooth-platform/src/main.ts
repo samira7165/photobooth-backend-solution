@@ -13,6 +13,9 @@ async function bootstrap() {
   app.use(helmet());
 
   // Serve uploaded asset files — e.g. http://localhost:3000/uploads/campaigns/...
+  // Note: this is NOT affected by setGlobalPrefix() below, since static-asset
+  // middleware sits outside Nest's controller routing. So local files live at
+  // /uploads/... directly, without the /api/v1 prefix every controller route gets.
   app.useStaticAssets(join(process.cwd(), 'uploads'), { prefix: '/uploads/' });
 
   // Validate & transform incoming DTOs, strip unknown properties

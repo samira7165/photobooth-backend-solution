@@ -8,11 +8,18 @@ import { Public } from '../common/decorators/public.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
 
+// Unlike the other controllers, this one mixes @Public() booth routes (what
+// the kiosk tablet calls, no auth) with @Roles()-gated admin routes in the
+// same controller — split by section below.
 @Controller('submissions')
 export class SubmissionsController {
   constructor(private submissionsService: SubmissionsService) {}
 
   // ─── PUBLIC BOOTH ENDPOINTS (no auth) ───
+  // Each has its own @Throttle() limit independent of the global 100/min
+  // default (see ThrottlerModule.forRoot in app.module.ts) and the coarse
+  // express-rate-limit middleware in main.ts — these are deliberately
+  // tighter since anyone can hit them without logging in.
 
   @Public()
   @Throttle({ default: { limit: 10, ttl: 60000 } }) // max 10 sessions/min per IP
@@ -44,6 +51,8 @@ export class SubmissionsController {
   }
 
   // ─── ADMIN ENDPOINTS (auth required) ───
+  // No @Public(), so the global JwtAuthGuard applies; RolesGuard + @Roles()
+  // enforce OPERATOR-and-up for read, ADMIN-and-up for retry/delete.
 
   @Get()
   @UseGuards(RolesGuard)

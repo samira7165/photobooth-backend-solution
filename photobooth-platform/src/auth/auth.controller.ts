@@ -6,6 +6,8 @@ import { Public } from '../common/decorators/public.decorator';
 export class AuthController {
   constructor(private authService: AuthService) {}
 
+  // @Public() bypasses the global JwtAuthGuard — you need to be logged out
+  // to call this.
   @Public()
   @Post('login')
   async login(@Body() body: { email: string; password: string }) {
@@ -18,6 +20,8 @@ export class AuthController {
     return this.authService.refreshToken(body.refreshToken);
   }
 
+  // No @Public() here, so JwtAuthGuard requires a valid access token;
+  // req.user is set by JwtStrategy.validate().
   @Get('profile')
   async getProfile(@Request() req) {
     return this.authService.getProfile(req.user.id);

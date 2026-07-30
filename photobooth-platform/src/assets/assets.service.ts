@@ -31,6 +31,12 @@ interface AssetUpdateInput {
   positionType?: string;
 }
 
+// Backgrounds, frames, and props are three separate Prisma models but share
+// an identical CRUD shape (create/list/get/update/replace-image/delete/reorder).
+// Rather than tripling that logic, the "shared CRUD core" section below does
+// the real work parameterized by AssetKind, and the per-type sections at the
+// bottom (BACKGROUNDS/FRAMES/PROPS) are thin wrappers with the specific
+// method names the controller calls.
 @Injectable()
 export class AssetsService {
   constructor(
@@ -119,6 +125,10 @@ export class AssetsService {
     return campaign;
   }
 
+  // Returns the Prisma model delegate for the given asset kind, so the shared
+  // CRUD methods below can call e.g. delegate.create(...) generically. Typed
+  // `any` because Background/Frame/Prop have slightly different shapes
+  // (positionType only exists on Prop).
   private getDelegate(kind: AssetKind): any {
     switch (kind) {
       case 'backgrounds':

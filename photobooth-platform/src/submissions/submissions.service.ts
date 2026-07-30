@@ -6,6 +6,12 @@ import { CreateSubmissionDto } from './dto/create-submission.dto';
 import { v4 as uuid } from 'uuid';
 import sharp from 'sharp';
 
+// A submission moves through UPLOADED -> QUEUED -> PROCESSING -> COMPLETED
+// (or FAILED at any point after UPLOADED). This service only ever creates
+// submissions as UPLOADED — the later transitions belong to the processing
+// pipeline (queue/worker), which isn't built yet, so QUEUED/PROCESSING/
+// COMPLETED are handled here defensively (see getStatus) but not currently
+// reachable through any implemented flow.
 @Injectable()
 export class SubmissionsService {
   private logger = new Logger(SubmissionsService.name);
@@ -18,6 +24,11 @@ export class SubmissionsService {
 
   // ─── BOOTH SESSION ───
 
+  // A "session" here is just a fresh UUID handed back to the kiosk — there's
+  // no BoothSession table. It exists purely so the booth can correlate
+  // multiple photos/actions from one physical visit via submission.sessionId;
+  // the real gatekeeping (campaign active, under submission limit) happens
+  // here and again in submitPhoto, since a session isn't required to submit.
   async createSession(campaignSlug: string, hallId?: string) {
     // Verify campaign exists and is active
     const campaign = await this.prisma.campaign.findUnique({ where: { slug: campaignSlug } });
@@ -128,7 +139,11 @@ export class SubmissionsService {
         file.mimetype,
       );
     } else {
-      // Local fallback
+      // Local fallback. Note the stored value is a bare relative path
+      // ("campaigns/.../originals/x.jpg", no leading "/uploads/") — different
+      // from AssetsService's convention of storing the full "/uploads/..."
+      // URL. deleteSubmission() below and any future reader of originalUrl
+      // must remember to join it with the uploads root themselves.
       const fs = await import('fs/promises');
       const path = await import('path');
       const uploadDir = path.join(process.cwd(), 'uploads', 'campaigns', campaign.slug, 'originals');
@@ -173,6 +188,10 @@ export class SubmissionsService {
 
   // ─── STATUS POLLING ───
 
+  // The booth polls this repeatedly after submitPhoto() until status is
+  // COMPLETED or FAILED. Response shape depends on status: COMPLETED adds
+  // result/qr/thumbnail URLs (presigned if on S3), FAILED adds an error
+  // message, QUEUED/PROCESSING add a rough queue position + wait estimate.
   async getStatus(submissionId: string) {
     const submission = await this.prisma.submission.findUnique({
       where: { id: submissionId },
@@ -221,6 +240,10 @@ export class SubmissionsService {
     }
 
     if (submission.status === 'QUEUED' || submission.status === 'PROCESSING') {
+      // Queue position/wait time is a global estimate across all campaigns
+      // (not scoped to this submission's campaign), on the assumption that
+      // one shared worker pool processes everything. 25s/job is a rough
+      // placeholder, not measured.
       // Get queue position
       const position = await this.prisma.submission.count({
         where: {
@@ -278,6 +301,10 @@ export class SubmissionsService {
 
   // ─── ADMIN: RETRY FAILED SUBMISSION ───
 
+  // Resets status back to UPLOADED so the (future) processing worker picks
+  // it up again, and bumps retryCount for visibility. Only valid from FAILED
+  // — there's nothing to retry for a submission that's still in flight or
+  // already succeeded.
   async retrySubmission(id: string) {
     const submission = await this.prisma.submission.findUnique({ where: { id } });
     if (!submission) throw new NotFoundException('Submission not found');

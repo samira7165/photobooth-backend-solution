@@ -12,6 +12,7 @@ export class AuthService {
     private configService: ConfigService,
   ) {}
 
+  // Checks email/password, then issues a fresh access + refresh token pair.
   async login(email: string, password: string) {
     const user = await this.prisma.user.findUnique({ where: { email } });
 
@@ -42,6 +43,9 @@ export class AuthService {
     };
   }
 
+  // Exchanges a still-valid refresh token for a new access + refresh pair,
+  // so the client never has to make the user log in again while the refresh
+  // token itself hasn't expired.
   async refreshToken(refreshToken: string) {
     try {
       const payload = this.jwtService.verify(refreshToken, {
@@ -66,6 +70,10 @@ export class AuthService {
     });
   }
 
+  // Access token is short-lived (JWT_EXPIRES_IN, default 15m) and used on every
+  // request; refresh token is long-lived (JWT_REFRESH_EXPIRES_IN, default 7d)
+  // and only ever sent to POST /auth/refresh. Separate secrets so a leaked
+  // access token can't be used to mint new refresh tokens.
   private async generateTokens(userId: string, email: string, role: string) {
     const payload = { sub: userId, email, role };
 

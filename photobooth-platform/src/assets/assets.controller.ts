@@ -22,6 +22,8 @@ import { UpdateAssetDto } from './dto/update-asset.dto';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
 
+// Every route here needs ADMIN or above — asset management (uploading
+// backgrounds/frames/props) is a staff-only operation.
 @Controller('assets')
 @UseGuards(RolesGuard)
 @Roles('ADMIN')
@@ -30,6 +32,9 @@ export class AssetsController {
 
   // ─── BACKGROUNDS ───
 
+  // multipart/form-data: text fields (name, campaignId, ...) plus one file
+  // under the "image" field name. FileInterceptor('image') must match that
+  // field name exactly.
   @Post('backgrounds')
   @UseInterceptors(FileInterceptor('image'))
   async createBackground(

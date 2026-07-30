@@ -2,6 +2,12 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { PrismaService } from '../prisma/prisma.service';
 import { encrypt, decrypt } from '../common/utils/encryption';
 
+// Manages AI provider API keys: encrypted storage, per-key/per-campaign usage
+// limits, and failover selection when a campaign needs a working key. The
+// PROVIDERS/API KEYS sections below back the admin endpoints in
+// ai-providers.controller.ts; KEY SELECTION and FAILOVER KEY SELECTION are
+// called internally by the processing pipeline (not exposed over HTTP) when
+// it actually needs to make an AI provider call on a campaign's behalf.
 @Injectable()
 export class AiProvidersService {
   constructor(private prisma: PrismaService) {}
@@ -163,6 +169,9 @@ export class AiProvidersService {
 
   // ─── KEY SELECTION (used by processing module) ───
 
+  // Picks the best available key for a campaign + optional provider, or null
+  // if nothing qualifies. Returns the key already decrypted — callers should
+  // use it immediately and not persist it anywhere.
   async getAvailableKey(campaignId: string, providerName?: string): Promise<{ key: string; keyId: string; providerId: string; providerName: string } | null> {
     // 1. Find keys linked to this campaign (or shared keys with null campaignId)
     const campaignKeys = await this.prisma.campaignApiKey.findMany({
@@ -213,6 +222,10 @@ export class AiProvidersService {
     };
   }
 
+  // Called after every AI provider call so getAvailableKey()'s filters
+  // (errorCount < 10, usageToday < dailyLimit) stay accurate. A success
+  // resets errorCount to 0, so one bad request doesn't permanently penalize
+  // an otherwise-healthy key.
   async recordKeyUsage(keyId: string, success: boolean, responseTime?: number) {
     if (success) {
       await this.prisma.apiKey.update({
@@ -251,6 +264,10 @@ export class AiProvidersService {
 
   // ─── FAILOVER KEY SELECTION ───
 
+  // Tries providers in priority order (default gemini -> dalle -> replicate),
+  // falling back to any available key from any provider before giving up.
+  // Throws (rather than returning null) since callers generally can't
+  // proceed at all without a key.
   async getKeyWithFailover(campaignId: string, providerPriority?: string[]): Promise<{ key: string; keyId: string; providerId: string; providerName: string }> {
     const priority = providerPriority || ['gemini', 'dalle', 'replicate'];
 

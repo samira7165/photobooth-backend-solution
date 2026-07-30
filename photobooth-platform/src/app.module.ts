@@ -35,6 +35,10 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
     // AnalyticsModule,
     // QueueModule,
   ],
+  // Multiple APP_GUARD providers all run on every request (Nest applies them
+  // in registration order, AND'd together — every guard must pass). JwtAuthGuard
+  // requires a valid token unless the route has @Public(); ThrottlerGuard then
+  // enforces the rate limits from ThrottlerModule.forRoot()/@Throttle() above.
   providers: [
     {
       provide: APP_GUARD,

@@ -3,6 +3,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateCampaignDto } from './dto/create-campaign.dto';
 import { UpdateCampaignDto } from './dto/update-campaign.dto';
 
+// Campaign status follows a one-way state machine (see updateStatus below):
+// DRAFT -> ACTIVE -> PAUSED/COMPLETED -> ARCHIVED. Only updateStatus() is
+// allowed to change status — the generic update() rejects it outright — so
+// the transition rules can't be bypassed by a plain PATCH.
 @Injectable()
 export class CampaignsService {
   constructor(private prisma: PrismaService) {}
@@ -73,6 +77,9 @@ export class CampaignsService {
     });
   }
 
+  // Slug-based lookup with only active assets included. Not currently called
+  // by any controller route (getBoothConfig below is the public slug-based
+  // lookup actually in use) — kept for future admin/internal use.
   async findBySlug(slug: string) {
     const campaign = await this.prisma.campaign.findUnique({
       where: { slug },

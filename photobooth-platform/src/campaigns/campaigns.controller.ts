@@ -41,6 +41,8 @@ export class CampaignsController {
     return this.campaignsService.updateStatus(id, body.status, req.user.id);
   }
 
+  // SUPER_ADMIN only — deleting a campaign is destructive and can't target an
+  // ACTIVE campaign (see CampaignsService.delete).
   @Delete(':id')
   @Roles('SUPER_ADMIN')
   async delete(@Param('id') id: string, @Request() req) {
@@ -48,6 +50,8 @@ export class CampaignsController {
   }
 
   // ─── PUBLIC BOOTH ENDPOINT ───
+  // What the kiosk tablet loads on startup — no auth, only returns campaigns
+  // that are ACTIVE.
   @Public()
   @Get('booth/:slug')
   async getBoothConfig(@Param('slug') slug: string) {

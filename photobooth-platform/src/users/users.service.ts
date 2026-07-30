@@ -7,6 +7,8 @@ import * as bcrypt from 'bcrypt';
 export class UsersService {
   constructor(private prisma: PrismaService) {}
 
+  // New staff accounts default to OPERATOR (the lowest privileged non-viewer
+  // role) unless a role is explicitly given.
   async create(data: { email: string; password: string; name: string; role?: Role }) {
     const existing = await this.prisma.user.findUnique({ where: { email: data.email } });
     if (existing) {
@@ -44,6 +46,8 @@ export class UsersService {
     return user;
   }
 
+  // isActive: false is the recommended way to disable a user who has activity
+  // history, since a hard delete() will be rejected in that case (see below).
   async update(id: string, data: { name?: string; role?: Role; isActive?: boolean }) {
     await this.findById(id); // throws if not found
     return this.prisma.user.update({

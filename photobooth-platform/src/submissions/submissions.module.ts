@@ -3,6 +3,9 @@ import { MulterModule } from '@nestjs/platform-express';
 import { SubmissionsService } from './submissions.service';
 import { SubmissionsController } from './submissions.controller';
 
+// No fileFilter here (unlike assets.module.ts) — mimetype is validated
+// manually in SubmissionsService.submitPhoto() against ALLOWED_MIME_TYPES
+// from .env instead, so the rejection message can be more specific.
 @Module({
   imports: [
     MulterModule.register({

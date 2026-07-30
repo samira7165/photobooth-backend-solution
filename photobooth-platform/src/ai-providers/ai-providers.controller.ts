@@ -6,6 +6,10 @@ import { UpdateApiKeyDto } from './dto/update-api-key.dto';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
 
+// Everything here needs SUPER_ADMIN by default (these routes create/rotate/
+// delete API keys) except listProviders and getHealth, which are downgraded
+// to ADMIN below since read-only visibility into provider health doesn't
+// need the same trust level as managing keys.
 @Controller('ai-providers')
 @UseGuards(RolesGuard)
 @Roles('SUPER_ADMIN')

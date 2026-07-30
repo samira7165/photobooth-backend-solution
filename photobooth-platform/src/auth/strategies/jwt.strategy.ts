@@ -4,6 +4,9 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
 
+// Verifies the "Bearer <token>" header on every request and turns the JWT
+// payload into the current user. Registered as Passport's default strategy
+// in auth.module.ts; JwtAuthGuard invokes it under the hood.
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(
@@ -17,6 +20,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
   }
 
+  // Runs once the JWT signature/expiry checks out. Whatever this returns
+  // becomes req.user, so we re-fetch the user here (rather than trusting the
+  // token's payload) to catch accounts that were deactivated after the token
+  // was issued.
   async validate(payload: { sub: string; email: string; role: string }) {
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },

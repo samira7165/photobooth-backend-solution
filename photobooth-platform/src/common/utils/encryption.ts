@@ -1,12 +1,19 @@
+// AES-256-GCM encrypt/decrypt for AI provider API keys at rest (see
+// AiProvidersService). GCM's auth tag means decrypt() throws if the
+// ciphertext was tampered with, not just if the key is wrong.
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'crypto';
 
 const ALGORITHM = 'aes-256-gcm';
 
+// Derives a 32-byte key from the env secret. scrypt (not a raw hash) makes
+// brute-forcing the secret itself expensive even if the derived key leaked.
 function getKey(): Buffer {
   const secret = process.env.ENCRYPTION_SECRET || process.env.JWT_SECRET;
   return scryptSync(secret, 'photobooth-salt', 32);
 }
 
+// Output format is "iv:authTag:ciphertext" (all hex), so decrypt() can pull
+// the IV and auth tag back out without a separate column in the database.
 export function encrypt(text: string): string {
   const iv = randomBytes(16);
   const key = getKey();

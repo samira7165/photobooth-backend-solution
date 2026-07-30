@@ -1,6 +1,9 @@
 import { IsString, IsOptional, IsInt, IsBoolean, IsEnum, MinLength } from 'class-validator';
 import { Type, Transform } from 'class-transformer';
 
+// @Type/@Transform below coerce string values into numbers/booleans, since
+// multipart/form-data always sends every field as a string (e.g. isActive
+// arrives as the literal text "true", not the boolean true).
 export class UpdateAssetDto {
   @IsOptional()
   @IsString()

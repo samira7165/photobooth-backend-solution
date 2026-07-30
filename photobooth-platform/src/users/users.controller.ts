@@ -4,11 +4,17 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Role } from '@prisma/client';
 
+// Every route here needs a valid JWT (enforced globally by JwtAuthGuard) plus
+// the role listed on each handler (enforced by RolesGuard, which honors the
+// SUPER_ADMIN > ADMIN > OPERATOR > VIEWER hierarchy — e.g. @Roles('ADMIN')
+// also lets SUPER_ADMIN through).
 @Controller('users')
 @UseGuards(RolesGuard)
 export class UsersController {
   constructor(private usersService: UsersService) {}
 
+  // Only SUPER_ADMIN can create staff accounts or change someone's role —
+  // ADMIN can view/manage day-to-day but not grant privileges.
   @Post()
   @Roles('SUPER_ADMIN')
   async create(@Body() body: { email: string; password: string; name: string; role?: Role }) {
