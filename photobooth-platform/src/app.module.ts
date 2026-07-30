@@ -7,6 +7,7 @@ import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { CampaignsModule } from './campaigns/campaigns.module';
 import { AssetsModule } from './assets/assets.module';
+import { AiProvidersModule } from './ai-providers/ai-providers.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 
 @Module({
@@ -18,6 +19,7 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
     UsersModule,
     CampaignsModule,
     AssetsModule,
+    AiProvidersModule,
     // Future modules will be added here:
     // SubmissionsModule,
     // ProcessingModule,
