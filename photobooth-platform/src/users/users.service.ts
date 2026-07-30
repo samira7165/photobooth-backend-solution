@@ -1,6 +1,6 @@
 import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { Role } from '@prisma/client';
+import { Role, Prisma } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 
 @Injectable()
@@ -64,7 +64,19 @@ export class UsersService {
 
   async delete(id: string) {
     await this.findById(id);
-    await this.prisma.user.delete({ where: { id } });
+    try {
+      await this.prisma.user.delete({ where: { id } });
+    } catch (err) {
+      // AuditLog rows reference this user and are never cascade-deleted (audit
+      // trails must survive user deletion), so MySQL rejects the delete with
+      // a foreign key constraint error once the user has any recorded activity.
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2003') {
+        throw new ConflictException(
+          'Cannot delete a user with existing activity history. Deactivate them instead (PATCH /users/:id with isActive: false).',
+        );
+      }
+      throw err;
+    }
     return { message: 'User deleted successfully' };
   }
 }

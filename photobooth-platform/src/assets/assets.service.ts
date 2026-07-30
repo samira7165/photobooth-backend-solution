@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { StorageService } from '../storage/storage.service';
 import { ImageOptimizer } from '../common/utils/image-optimizer';
 import * as fs from 'fs/promises';
 import * as path from 'path';
@@ -32,7 +33,10 @@ interface AssetUpdateInput {
 
 @Injectable()
 export class AssetsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private storage: StorageService,
+  ) {}
 
   // ─── shared file helpers ───
 
@@ -40,49 +44,79 @@ export class AssetsService {
     return name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
   }
 
-  private async saveAssetFiles(campaignId: string, kind: AssetKind, file: Express.Multer.File) {
+  // Builds the thumbnail once, format-aware so PNGs (frames/props) keep transparency
+  // instead of being flattened to JPEG.
+  private async makeThumbnail(buffer: Buffer, thumbExt: 'png' | 'jpg') {
+    return thumbExt === 'png'
+      ? sharp(buffer).resize({ width: 200 }).png({ quality: 70 }).toBuffer()
+      : sharp(buffer).resize({ width: 200 }).jpeg({ quality: 70 }).toBuffer();
+  }
+
+  private async saveAssetFiles(campaign: { id: string; slug: string }, kind: AssetKind, file: Express.Multer.File) {
     const validation = await ImageOptimizer.validateImage(file.buffer);
     if (!validation.valid) {
       throw new BadRequestException('Uploaded file is not a valid image');
     }
 
     const ext = MIME_EXT[file.mimetype] || 'jpg';
+    const thumbExt: 'png' | 'jpg' = ext === 'png' ? 'png' : 'jpg';
+    const thumbContentType = thumbExt === 'png' ? 'image/png' : 'image/jpeg';
+    const thumbBuffer = await this.makeThumbnail(file.buffer, thumbExt);
+
+    if (this.storage.isConfigured()) {
+      // Production: upload the original and its thumbnail to S3, store the S3 keys.
+      const imageKey = await this.storage.upload(
+        file.buffer,
+        this.storage.getCampaignPath(campaign.slug, kind),
+        file.originalname,
+        file.mimetype,
+      );
+      const thumbnailKey = imageKey.replace(`/${kind}/`, '/thumbnails/');
+      await this.storage.uploadWithKey(thumbBuffer, thumbnailKey, thumbContentType);
+
+      return { imageUrl: imageKey, thumbnailUrl: thumbnailKey };
+    }
+
+    // Development fallback: no AWS credentials configured, save to local disk instead.
     const uid = randomUUID();
     const safeName = this.sanitizeName(file.originalname);
     const filename = `${uid}-${safeName}`;
-    const thumbExt = ext === 'png' ? 'png' : 'jpg';
     const thumbFilename = `${uid}-thumb.${thumbExt}`;
 
-    const assetDir = path.join(UPLOAD_ROOT, 'campaigns', campaignId, kind);
-    const thumbDir = path.join(UPLOAD_ROOT, 'campaigns', campaignId, 'thumbnails');
+    const assetDir = path.join(UPLOAD_ROOT, 'campaigns', campaign.id, kind);
+    const thumbDir = path.join(UPLOAD_ROOT, 'campaigns', campaign.id, 'thumbnails');
     await fs.mkdir(assetDir, { recursive: true });
     await fs.mkdir(thumbDir, { recursive: true });
 
     await fs.writeFile(path.join(assetDir, filename), file.buffer);
-
-    const thumbBuffer =
-      thumbExt === 'png'
-        ? await sharp(file.buffer).resize({ width: 200 }).png({ quality: 70 }).toBuffer()
-        : await sharp(file.buffer).resize({ width: 200 }).jpeg({ quality: 70 }).toBuffer();
     await fs.writeFile(path.join(thumbDir, thumbFilename), thumbBuffer);
 
     return {
-      imageUrl: `/uploads/campaigns/${campaignId}/${kind}/${filename}`,
-      thumbnailUrl: `/uploads/campaigns/${campaignId}/thumbnails/${thumbFilename}`,
+      imageUrl: `/uploads/campaigns/${campaign.id}/${kind}/${filename}`,
+      thumbnailUrl: `/uploads/campaigns/${campaign.id}/thumbnails/${thumbFilename}`,
     };
   }
 
+  // Local paths always start with "/uploads/" (see saveAssetFiles above); anything else
+  // is an S3 key. Routing on the URL shape — rather than re-checking isConfigured() here —
+  // means a file still gets deleted from the right place even if AWS credentials were
+  // added or removed after it was originally uploaded.
   private async deleteAssetFiles(imageUrl?: string | null, thumbnailUrl?: string | null) {
     for (const url of [imageUrl, thumbnailUrl]) {
       if (!url) continue;
-      const filePath = path.join(process.cwd(), url.replace(/^\//, ''));
-      await fs.unlink(filePath).catch(() => undefined);
+      if (url.startsWith('/uploads/')) {
+        const filePath = path.join(process.cwd(), url.replace(/^\//, ''));
+        await fs.unlink(filePath).catch(() => undefined);
+      } else {
+        await this.storage.delete(url);
+      }
     }
   }
 
-  private async assertCampaignExists(campaignId: string) {
+  private async getCampaignOrThrow(campaignId: string) {
     const campaign = await this.prisma.campaign.findUnique({ where: { id: campaignId } });
     if (!campaign) throw new NotFoundException('Campaign not found');
+    return campaign;
   }
 
   private getDelegate(kind: AssetKind): any {
@@ -108,8 +142,8 @@ export class AssetsService {
     file: Express.Multer.File,
     userId: string,
   ) {
-    await this.assertCampaignExists(dto.campaignId);
-    const { imageUrl, thumbnailUrl } = await this.saveAssetFiles(dto.campaignId, kind, file);
+    const campaign = await this.getCampaignOrThrow(dto.campaignId);
+    const { imageUrl, thumbnailUrl } = await this.saveAssetFiles(campaign, kind, file);
 
     const data: any = {
       campaignId: dto.campaignId,
@@ -177,7 +211,8 @@ export class AssetsService {
 
   private async updateAssetImage(kind: AssetKind, id: string, file: Express.Multer.File, userId: string) {
     const existing = await this.findAssetById(kind, id);
-    const { imageUrl, thumbnailUrl } = await this.saveAssetFiles(existing.campaignId, kind, file);
+    const campaign = await this.getCampaignOrThrow(existing.campaignId);
+    const { imageUrl, thumbnailUrl } = await this.saveAssetFiles(campaign, kind, file);
 
     const updated = await this.getDelegate(kind).update({
       where: { id },

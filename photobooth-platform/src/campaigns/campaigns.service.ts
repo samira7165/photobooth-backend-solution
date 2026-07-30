@@ -120,6 +120,13 @@ export class CampaignsService {
   async update(id: string, dto: UpdateCampaignDto, userId: string) {
     await this.findById(id); // throws if not found
 
+    // Status changes must go through updateStatus() so the DRAFT -> ACTIVE -> ...
+    // transition rules are enforced. Allowing it here would let a caller skip
+    // straight from DRAFT to ARCHIVED, for example.
+    if (dto.status) {
+      throw new BadRequestException('Use PATCH /campaigns/:id/status to change campaign status');
+    }
+
     // If slug is being changed, check uniqueness
     if (dto.slug) {
       if (!/^[a-z0-9-]+$/.test(dto.slug)) {
