@@ -14,6 +14,7 @@ import {
   LogOut,
   Menu,
   X,
+  FlaskConical,
 } from 'lucide-react';
 import { hasRole } from '@/lib/utils';
 
@@ -24,6 +25,7 @@ const NAV_ITEMS = [
   { href: '/providers', label: 'AI Providers', icon: Bot },
   { href: '/submissions', label: 'Submissions', icon: Camera },
   { href: '/users', label: 'Users', icon: Users, minRole: 'ADMIN' },
+  { href: '/booth-test', label: 'Booth Test', icon: FlaskConical },
 ];
 
 export default function Sidebar({ user }) {
