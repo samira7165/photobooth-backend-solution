@@ -87,7 +87,7 @@ export class StorageService {
         Key: key,
       }));
       this.logger.log(`Deleted: ${key}`);
-    } catch (err) {
+    } catch (err : any) {
       this.logger.warn(`Failed to delete ${key}: ${err.message}`);
     }
   }
@@ -99,6 +99,23 @@ export class StorageService {
     for (const key of keys) {
       await this.delete(key);
     }
+  }
+
+  /**
+   * Download a file's contents from S3 as a Buffer (e.g. for server-side
+   * image processing, where a presigned URL isn't usable).
+   */
+  async download(key: string): Promise<Buffer> {
+    const response = await this.s3.send(new GetObjectCommand({
+      Bucket: this.bucket,
+      Key: key,
+    }));
+
+    const chunks: Buffer[] = [];
+    for await (const chunk of response.Body as any) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks);
   }
 
   /**

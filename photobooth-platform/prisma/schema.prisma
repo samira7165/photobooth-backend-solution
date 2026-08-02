@@ -57,7 +57,7 @@ model Campaign {
   backgroundConfig Json?          // { removal, allowCustomUpload, defaultBackgroundId }
   frameConfig     Json?           // { enabled, defaultFrameId }
   propConfig      Json?           // { enabled }
-  qrConfig        Json?           // { enabled, position: {x,y}, size, contentType, customContent }
+  qrConfig        Json?           // { enabled, position: {x,y}, size, contentType, customContent, embedInImage }
   textConfig      Json?           // { enabled, content, position: {x,y}, font, color, size, allowCustomText }
   collectFields   Json            @default("[\"name\", \"phone\"]") // which user info fields to collect
   outputMode      String          @default("qr") // "qr", "download", "print", "sms", "email"
@@ -198,6 +198,7 @@ model Submission {
 
   // Output
   qrCodeUrl       String?
+  downloadCode    String?           @unique
   downloadCount   Int               @default(0)
 
   createdAt       DateTime          @default(now())
@@ -208,6 +209,7 @@ model Submission {
   @@index([campaignId])
   @@index([status])
   @@index([createdAt])
+  // No separate @@index([downloadCode]) — @unique above already creates one.
   @@map("submissions")
 }
 

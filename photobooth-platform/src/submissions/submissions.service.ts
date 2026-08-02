@@ -5,6 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import { CreateSubmissionDto } from './dto/create-submission.dto';
 import { v4 as uuid } from 'uuid';
 import sharp from 'sharp';
+import { WebsocketGateway } from '../websocket/websocket.gateway';
 
 // A submission moves through UPLOADED -> QUEUED -> PROCESSING -> COMPLETED
 // (or FAILED at any point after UPLOADED). This service only ever creates
@@ -20,6 +21,7 @@ export class SubmissionsService {
     private prisma: PrismaService,
     private storage: StorageService,
     private config: ConfigService,
+    private websocketGateway: WebsocketGateway,
   ) {}
 
   // ─── BOOTH SESSION ───
@@ -178,7 +180,15 @@ export class SubmissionsService {
 
     this.logger.log(`Submission created: ${submission.id} for campaign ${campaign.slug}`);
 
-    // 8. Return submission ID — the booth will poll for status
+    // 8. Notify admin dashboards in real time
+    this.websocketGateway.notifyNewSubmission({
+      submissionId: submission.id,
+      campaignSlug: campaign.slug,
+      userName: dto.userName,
+      mode,
+    });
+
+    // 9. Return submission ID — the booth will poll for status
     return {
       submissionId: submission.id,
       status: submission.status,
@@ -201,6 +211,7 @@ export class SubmissionsService {
         resultUrl: true,
         qrCodeUrl: true,
         thumbnailUrl: true,
+        downloadCode: true,
         errorMessage: true,
         processingTime: true,
         createdAt: true,
@@ -233,6 +244,12 @@ export class SubmissionsService {
         response.thumbnailUrl = submission.thumbnailUrl ? `/uploads/${submission.thumbnailUrl}` : null;
       }
       response.processingTime = submission.processingTime;
+
+      if (submission.downloadCode) {
+        const baseUrl = this.config.get<string>('FRONTEND_URL') || 'http://localhost:3001';
+        response.downloadUrl = `${baseUrl}/dl/${submission.downloadCode}`;
+        response.downloadCode = submission.downloadCode;
+      }
     }
 
     if (submission.status === 'FAILED') {

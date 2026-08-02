@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head><title>WS Test</title></head>
+<body>
+<h1>WebSocket Test</h1>
+<div id="log" style="font-family:monospace; white-space:pre; background:#111; color:#0f0; padding:20px; height:400px; overflow:auto;"></div>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script>
+const log = document.getElementById('log');
+function addLog(msg) {
+  log.textContent += new Date().toLocaleTimeString() + ' | ' + msg + '\n';
+  log.scrollTop = log.scrollHeight;
+}
+
+const socket = io('http://localhost:3000/ws', { transports: ['websocket'] });
+
+socket.on('connect', () => {
+  addLog('Connected: ' + socket.id);
+
+  // Join as admin
+  socket.emit('admin:join', null, (response) => {
+    addLog('Joined admin room: ' + JSON.stringify(response));
+  });
+});
+
+socket.on('disconnect', () => addLog('Disconnected'));
+
+// Listen for all events
+socket.on('admin:job_update', (data) => addLog('JOB UPDATE: ' + JSON.stringify(data)));
+socket.on('admin:queue_stats', (data) => addLog('QUEUE STATS: ' + JSON.stringify(data)));
+socket.on('admin:new_submission', (data) => addLog('NEW SUBMISSION: ' + JSON.stringify(data)));
+socket.on('admin:provider_health', (data) => addLog('PROVIDER HEALTH: ' + JSON.stringify(data)));
+</script>
+</body>
+</html>

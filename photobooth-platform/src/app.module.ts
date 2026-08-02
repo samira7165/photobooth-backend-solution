@@ -10,7 +10,11 @@ import { CampaignsModule } from './campaigns/campaigns.module';
 import { AssetsModule } from './assets/assets.module';
 import { AiProvidersModule } from './ai-providers/ai-providers.module';
 import { StorageModule } from './storage/storage.module';
+import { WebsocketModule } from './websocket/websocket.module';
 import { SubmissionsModule } from './submissions/submissions.module';
+import { ImageModule } from './image/image.module';
+import { DeliveryModule } from './delivery/delivery.module';
+import { QueueMonitorModule } from './queue/queue.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 
 @Module({
@@ -19,6 +23,7 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
     PrismaModule,     // database connection — globally available
     RedisModule,      // redis connection — globally available
     StorageModule,    // S3 client — globally available (falls back to local disk in dev)
+    WebsocketModule,  // Socket.IO gateway — globally available
     // Default rate limit for all routes; booth endpoints override with tighter
     // per-route @Throttle() limits. Independent of the coarse express-rate-limit
     // middleware in main.ts, which stays as a blanket first line of defense.
@@ -29,11 +34,12 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
     AssetsModule,
     AiProvidersModule,
     SubmissionsModule,
+    ImageModule,
+    DeliveryModule,
+    QueueMonitorModule,
     // Future modules will be added here:
     // ProcessingModule,
-    // ImageModule,
     // AnalyticsModule,
-    // QueueModule,
   ],
   // Multiple APP_GUARD providers all run on every request (Nest applies them
   // in registration order, AND'd together — every guard must pass). JwtAuthGuard
