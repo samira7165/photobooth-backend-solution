@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
+import { ConfigService } from '@nestjs/config';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { BullModule } from '@nestjs/bullmq';
 import { AppConfigModule } from './config/config.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RedisModule } from './redis/redis.module';
@@ -15,6 +17,7 @@ import { SubmissionsModule } from './submissions/submissions.module';
 import { ImageModule } from './image/image.module';
 import { DeliveryModule } from './delivery/delivery.module';
 import { QueueMonitorModule } from './queue/queue.module';
+import { ProcessingModule } from './processing/processing.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 
 @Module({
@@ -24,6 +27,19 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
     RedisModule,      // redis connection — globally available
     StorageModule,    // S3 client — globally available (falls back to local disk in dev)
     WebsocketModule,  // Socket.IO gateway — globally available
+    // BullMQ's Redis connection, resolved the same way RedisService (src/redis/redis.service.ts)
+    // already does — same host/port/password source, so it connects the same way that's
+    // already proven to work against the docker-compose Redis in this environment.
+    BullModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        connection: {
+          host: config.get<string>('REDIS_HOST', 'localhost'),
+          port: parseInt(config.get<string>('REDIS_PORT', '6379'), 10),
+          password: config.get<string>('REDIS_PASSWORD'),
+        },
+      }),
+    }),
     // Default rate limit for all routes; booth endpoints override with tighter
     // per-route @Throttle() limits. Independent of the coarse express-rate-limit
     // middleware in main.ts, which stays as a blanket first line of defense.
@@ -37,8 +53,8 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
     ImageModule,
     DeliveryModule,
     QueueMonitorModule,
+    ProcessingModule,
     // Future modules will be added here:
-    // ProcessingModule,
     // AnalyticsModule,
   ],
   // Multiple APP_GUARD providers all run on every request (Nest applies them

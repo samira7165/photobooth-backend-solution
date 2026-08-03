@@ -6,13 +6,12 @@ import { CreateSubmissionDto } from './dto/create-submission.dto';
 import { v4 as uuid } from 'uuid';
 import sharp from 'sharp';
 import { WebsocketGateway } from '../websocket/websocket.gateway';
+import { QueueMonitorService } from '../queue/queue.service';
 
 // A submission moves through UPLOADED -> QUEUED -> PROCESSING -> COMPLETED
-// (or FAILED at any point after UPLOADED). This service only ever creates
-// submissions as UPLOADED — the later transitions belong to the processing
-// pipeline (queue/worker), which isn't built yet, so QUEUED/PROCESSING/
-// COMPLETED are handled here defensively (see getStatus) but not currently
-// reachable through any implemented flow.
+// (or FAILED at any point after UPLOADED). submitPhoto() creates the row as
+// UPLOADED then immediately enqueues it (-> QUEUED); ProcessingWorker (see
+// src/processing/processing.worker.ts) owns every transition after that.
 @Injectable()
 export class SubmissionsService {
   private logger = new Logger(SubmissionsService.name);
@@ -22,6 +21,7 @@ export class SubmissionsService {
     private storage: StorageService,
     private config: ConfigService,
     private websocketGateway: WebsocketGateway,
+    private queueService: QueueMonitorService,
   ) {}
 
   // ─── BOOTH SESSION ───
@@ -180,18 +180,23 @@ export class SubmissionsService {
 
     this.logger.log(`Submission created: ${submission.id} for campaign ${campaign.slug}`);
 
-    // 8. Notify admin dashboards in real time
+    // 8. Enqueue for processing
+    await this.queueService.addJob(submission.id);
+    await this.prisma.submission.update({ where: { id: submission.id }, data: { status: 'QUEUED' } });
+
+    // 9. Notify admin dashboards in real time
     this.websocketGateway.notifyNewSubmission({
       submissionId: submission.id,
       campaignSlug: campaign.slug,
       userName: dto.userName,
       mode,
     });
+    this.websocketGateway.notifyQueueStats(await this.queueService.getQueueStats());
 
-    // 9. Return submission ID — the booth will poll for status
+    // 10. Return submission ID — the booth will poll for status
     return {
       submissionId: submission.id,
-      status: submission.status,
+      status: 'QUEUED',
       message: 'Photo uploaded successfully. Processing will begin shortly.',
     };
   }
@@ -318,10 +323,11 @@ export class SubmissionsService {
 
   // ─── ADMIN: RETRY FAILED SUBMISSION ───
 
-  // Resets status back to UPLOADED so the (future) processing worker picks
-  // it up again, and bumps retryCount for visibility. Only valid from FAILED
-  // — there's nothing to retry for a submission that's still in flight or
-  // already succeeded.
+  // Re-enqueues the job (the completed/failed BullMQ job for this id was
+  // already pruned by removeOnFail, so the same submissionId is free to
+  // reuse as the new job's id) and bumps retryCount for visibility. Only
+  // valid from FAILED — there's nothing to retry for a submission that's
+  // still in flight or already succeeded.
   async retrySubmission(id: string) {
     const submission = await this.prisma.submission.findUnique({ where: { id } });
     if (!submission) throw new NotFoundException('Submission not found');
@@ -329,14 +335,16 @@ export class SubmissionsService {
       throw new BadRequestException('Can only retry failed submissions');
     }
 
+    await this.queueService.addJob(id);
     await this.prisma.submission.update({
       where: { id },
       data: {
-        status: 'UPLOADED',
+        status: 'QUEUED',
         errorMessage: null,
         retryCount: { increment: 1 },
       },
     });
+    this.websocketGateway.notifyQueueStats(await this.queueService.getQueueStats());
 
     return { message: 'Submission queued for retry', submissionId: id };
   }
