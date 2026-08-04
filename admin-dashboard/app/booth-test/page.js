@@ -221,10 +221,9 @@ export default function BoothTestPage() {
       <div className="max-w-3xl space-y-6">
         <div className="bg-blue-500/10 border border-blue-500/30 text-blue-300 text-sm rounded-lg px-4 py-3">
           Drives the real public booth API (session → submit → status poll) exactly like a kiosk
-          tablet would. There's no processing pipeline built yet, so a submission will sit at{' '}
-          <span className="font-mono">UPLOADED</span> — that's expected, not a bug. Once non-AI
-          processing exists, this page will show it moving to <span className="font-mono">COMPLETED</span>{' '}
-          with a result image.
+          tablet would — including the queue and processing pipeline, so a submitted photo will
+          actually move through <span className="font-mono">QUEUED → PROCESSING → COMPLETED</span> and
+          come back with a real result image and QR code.
         </div>
 
         {/* Step 1: campaign */}
@@ -390,17 +389,62 @@ export default function BoothTestPage() {
                   )}
                 </div>
 
+                {(submission.status === 'UPLOADED' || submission.status === 'QUEUED' || submission.status === 'PROCESSING') && (
+                  <p className="text-gray-500 text-sm">
+                    {submission.queuePosition != null
+                      ? `Queue position ${submission.queuePosition}, ~${submission.estimatedWaitSeconds}s estimated`
+                      : 'Waiting for the queue to pick this up…'}
+                  </p>
+                )}
+
                 {submission.status === 'FAILED' && (
                   <p className="text-red-400 text-sm">{submission.error || 'Processing failed'}</p>
                 )}
 
-                {submission.status === 'COMPLETED' && submission.resultUrl && (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={resolveImageUrl(submission.resultUrl)}
-                    alt="Result"
-                    className="w-full max-w-sm rounded-lg"
-                  />
+                {submission.status === 'COMPLETED' && (
+                  <div className="space-y-4">
+                    {submission.processingTime != null && (
+                      <p className="text-xs text-gray-500">Processed in {submission.processingTime}ms</p>
+                    )}
+                    <div className="flex flex-wrap gap-4">
+                      {submission.resultUrl && (
+                        <div>
+                          <p className="text-xs text-gray-500 mb-1">Result</p>
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={resolveImageUrl(submission.resultUrl)}
+                            alt="Result"
+                            className="max-w-xs rounded-lg border border-white/10"
+                          />
+                        </div>
+                      )}
+                      {submission.qrCodeUrl && (
+                        <div>
+                          <p className="text-xs text-gray-500 mb-1">QR Code</p>
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={resolveImageUrl(submission.qrCodeUrl)}
+                            alt="QR code"
+                            className="w-32 h-32 rounded-lg border border-white/10 bg-white"
+                          />
+                        </div>
+                      )}
+                    </div>
+                    {submission.downloadUrl && (
+                      <p className="text-xs text-gray-400">
+                        Download link:{' '}
+                        <a
+                          href={submission.downloadUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[#2563eb] hover:underline font-mono"
+                        >
+                          {submission.downloadUrl}
+                        </a>
+                        {submission.downloadCode && ` (code: ${submission.downloadCode})`}
+                      </p>
+                    )}
+                  </div>
                 )}
 
                 <button
