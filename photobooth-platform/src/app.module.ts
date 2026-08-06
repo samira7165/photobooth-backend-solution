@@ -18,6 +18,7 @@ import { ImageModule } from './image/image.module';
 import { DeliveryModule } from './delivery/delivery.module';
 import { QueueMonitorModule } from './queue/queue.module';
 import { ProcessingModule } from './processing/processing.module';
+import { AnalyticsModule } from './analytics/analytics.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 
 @Module({
@@ -54,8 +55,7 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
     DeliveryModule,
     QueueMonitorModule,
     ProcessingModule,
-    // Future modules will be added here:
-    // AnalyticsModule,
+    AnalyticsModule,
   ],
   // Multiple APP_GUARD providers all run on every request (Nest applies them
   // in registration order, AND'd together — every guard must pass). JwtAuthGuard
