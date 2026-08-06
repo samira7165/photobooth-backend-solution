@@ -10,6 +10,7 @@ import AssetsTab from '@/components/AssetsTab';
 import SubmissionsTab from '@/components/SubmissionsTab';
 import useCurrentUser from '@/lib/useCurrentUser';
 import { hasRole, CAMPAIGN_STATUS_TRANSITIONS, formatDate } from '@/lib/utils';
+import AiModelConfigSection, { flattenProviderKeys, keyLabel } from '@/components/AiModelConfigSection';
 
 const TABS = ['Overview', 'Assets', 'Submissions'];
 
@@ -219,6 +220,8 @@ function OverviewTab({ campaign }) {
         <StatBox label="Created" value={formatDate(campaign.createdAt)} small />
       </div>
 
+      <AiChainDisplay campaign={campaign} />
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <ConfigSection title="Photo Settings" config={campaign.photoSettings} />
         <ConfigSection title="Brand Config" config={campaign.brandConfig} />
@@ -241,6 +244,38 @@ function OverviewTab({ campaign }) {
           <Detail label="Total Budget" value={campaign.totalBudget} />
         </div>
       </div>
+    </div>
+  );
+}
+
+// Resolves aiConfig.keyChain (ordered key ids) against apiKeyLinks (the
+// linked keys' provider/model details) so the failover order shows as
+// "1. Gemini (model) → 2. ..." instead of raw key ids.
+function AiChainDisplay({ campaign }) {
+  const chain = campaign.aiConfig?.keyChain || [];
+  const [aiKeys, setAiKeys] = useState([]);
+
+  useEffect(() => {
+    if (chain.length === 0) return;
+    api
+      .get('/ai-providers')
+      .then((res) => setAiKeys(flattenProviderKeys(res.data)))
+      .catch(() => setAiKeys([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaign.id]);
+
+  if (chain.length === 0) return null;
+
+  const parts = chain.map((id, i) => {
+    const key = aiKeys.find((k) => k.id === id);
+    const label = key ? keyLabel(key) : `Unknown key (${id.slice(0, 8)}…)`;
+    return `${i + 1}. ${label}`;
+  });
+
+  return (
+    <div className="bg-[#111111] border border-white/10 rounded-xl p-5">
+      <h3 className="text-sm font-semibold text-white uppercase tracking-wide mb-3">AI Failover Chain</h3>
+      <div className="text-sm text-gray-300 font-mono break-all">{parts.join(' → ')}</div>
     </div>
   );
 }
@@ -268,6 +303,20 @@ function EditCampaignModal({ open, onClose, campaign, onSaved }) {
   const [error, setError] = useState('');
   const [form, setForm] = useState(null);
 
+  const [aiKeys, setAiKeys] = useState([]);
+  const [aiKeysLoading, setAiKeysLoading] = useState(true);
+  const [keyChain, setKeyChain] = useState(['']);
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [originalChain, setOriginalChain] = useState([]);
+
+  useEffect(() => {
+    api
+      .get('/ai-providers')
+      .then((res) => setAiKeys(flattenProviderKeys(res.data)))
+      .catch(() => setAiKeys([]))
+      .finally(() => setAiKeysLoading(false));
+  }, []);
+
   useEffect(() => {
     if (campaign) {
       setForm({
@@ -278,16 +327,52 @@ function EditCampaignModal({ open, onClose, campaign, onSaved }) {
         outputHeight: campaign.photoSettings?.outputHeight || 1920,
         outputMode: campaign.outputMode,
       });
+
+      const chain = (campaign.aiConfig?.keyChain || []).filter(Boolean);
+      setKeyChain(chain.length > 0 ? chain : ['']);
+      setAiPrompt(campaign.aiConfig?.prompt || '');
+      setOriginalChain(chain);
     }
   }, [campaign]);
 
   if (!form) return null;
 
+  const aiModeSelected = form.processingMode === 'ai' || form.processingMode === 'both';
+
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setSaving(true);
     setError('');
+
+    const chain = keyChain.filter(Boolean);
+    if (aiModeSelected && chain.length === 0) {
+      setError('Select a Primary Model before saving an AI-enabled campaign');
+      return;
+    }
+
+    setSaving(true);
     try {
+      if (aiModeSelected) {
+        // chain entries are ApiKeyModel ids — resolve each to its underlying
+        // ApiKey id and dedupe before diffing, since the same key can appear
+        // more than once in a chain under different models and link/unlink
+        // only make sense at the physical-key level.
+        const apiKeyIdFor = (chainEntryId) => aiKeys.find((k) => k.id === chainEntryId)?.apiKeyId;
+        const originalKeyIds = [...new Set(originalChain.map(apiKeyIdFor).filter(Boolean))];
+        const newKeyIds = [...new Set(chain.map(apiKeyIdFor).filter(Boolean))];
+
+        const toUnlink = originalKeyIds.filter((id) => !newKeyIds.includes(id));
+        const toLink = newKeyIds.filter((id) => !originalKeyIds.includes(id));
+
+        const results = await Promise.allSettled([
+          ...toUnlink.map((keyId) => api.delete(`/ai-providers/keys/${keyId}/link/${campaign.id}`)),
+          ...toLink.map((keyId) => api.post(`/ai-providers/keys/${keyId}/link/${campaign.id}`)),
+        ]);
+        const failed = results.filter((r) => r.status === 'rejected');
+        if (failed.length > 0) {
+          console.error('Some AI key links failed to update:', failed);
+        }
+      }
+
       // Deliberately no `status` field — CampaignsService.update() rejects
       // it (status changes must go through PATCH /campaigns/:id/status).
       await api.patch(`/campaigns/${campaign.id}`, {
@@ -299,6 +384,13 @@ function EditCampaignModal({ open, onClose, campaign, onSaved }) {
           outputHeight: Number(form.outputHeight),
         },
         outputMode: form.outputMode,
+        ...(aiModeSelected && {
+          aiConfig: {
+            prompt: aiPrompt,
+            keyChain: chain,
+            fallbackProviders: chain.map((id) => aiKeys.find((k) => k.id === id)?.providerName).filter(Boolean),
+          },
+        }),
       });
       onSaved();
     } catch (err) {
@@ -341,6 +433,18 @@ function EditCampaignModal({ open, onClose, campaign, onSaved }) {
             <option value="both">both</option>
           </select>
         </div>
+
+        {aiModeSelected && (
+          <AiModelConfigSection
+            aiKeys={aiKeys}
+            keysLoading={aiKeysLoading}
+            keyChain={keyChain}
+            onKeyChainChange={setKeyChain}
+            prompt={aiPrompt}
+            onPromptChange={setAiPrompt}
+            required
+          />
+        )}
 
         <div>
           <label className="block text-sm font-medium text-gray-300 mb-1.5">Orientation</label>

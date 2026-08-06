@@ -7,10 +7,6 @@ export class UpdateApiKeyDto {
   keyIdentifier?: string;
 
   @IsOptional()
-  @IsString()
-  model?: string;
-
-  @IsOptional()
   @IsBoolean()
   isActive?: boolean;
 

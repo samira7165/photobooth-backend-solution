@@ -1,9 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import api from '@/lib/api';
 import DashboardLayout from '@/components/DashboardLayout';
+import AiModelConfigSection, { flattenProviderKeys } from '@/components/AiModelConfigSection';
 
 function slugify(value) {
   return value
@@ -36,6 +37,21 @@ export default function CreateCampaignPage() {
     outputMode: 'qr',
   });
 
+  const [aiKeys, setAiKeys] = useState([]);
+  const [aiKeysLoading, setAiKeysLoading] = useState(true);
+  const [keyChain, setKeyChain] = useState(['']);
+  const [aiPrompt, setAiPrompt] = useState('');
+
+  useEffect(() => {
+    api
+      .get('/ai-providers')
+      .then((res) => setAiKeys(flattenProviderKeys(res.data)))
+      .catch(() => setAiKeys([]))
+      .finally(() => setAiKeysLoading(false));
+  }, []);
+
+  const aiModeSelected = form.processingMode === 'ai' || form.processingMode === 'both';
+
   const handleNameChange = (value) => {
     setForm((f) => ({
       ...f,
@@ -56,9 +72,24 @@ export default function CreateCampaignPage() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+
+    const chain = keyChain.filter(Boolean);
+    if (aiModeSelected && chain.length === 0) {
+      setError('Select a Primary Model before creating an AI-enabled campaign');
+      return;
+    }
+
     setSaving(true);
 
     try {
+      const aiConfig = aiModeSelected
+        ? {
+            prompt: aiPrompt,
+            keyChain: chain,
+            fallbackProviders: chain.map((id) => aiKeys.find((k) => k.id === id)?.providerName).filter(Boolean),
+          }
+        : undefined;
+
       const res = await api.post('/campaigns', {
         name: form.name,
         slug: form.slug,
@@ -73,10 +104,29 @@ export default function CreateCampaignPage() {
           secondaryColor: form.secondaryColor,
           backgroundColor: form.backgroundColor,
         },
+        ...(aiConfig && { aiConfig }),
         collectFields: form.collectFields,
         outputMode: form.outputMode,
       });
-      router.push(`/campaigns/${res.data.id}`);
+
+      const campaignId = res.data.id;
+
+      // chain entries are ApiKeyModel ids (one key can appear more than once
+      // under different models) — link the underlying key once per unique
+      // ApiKey id, not once per chain entry.
+      const apiKeyIdsToLink = [...new Set(chain.map((id) => aiKeys.find((k) => k.id === id)?.apiKeyId).filter(Boolean))];
+
+      if (apiKeyIdsToLink.length > 0) {
+        const results = await Promise.allSettled(
+          apiKeyIdsToLink.map((keyId) => api.post(`/ai-providers/keys/${keyId}/link/${campaignId}`)),
+        );
+        const failed = results.filter((r) => r.status === 'rejected');
+        if (failed.length > 0) {
+          console.error('Some AI keys failed to link to the new campaign:', failed);
+        }
+      }
+
+      router.push(`/campaigns/${campaignId}`);
     } catch (err) {
       const msg = err.response?.data?.message;
       setError(Array.isArray(msg) ? msg.join(', ') : msg || 'Failed to create campaign');
@@ -129,6 +179,18 @@ export default function CreateCampaignPage() {
             </select>
           </Field>
         </Section>
+
+        {aiModeSelected && (
+          <AiModelConfigSection
+            aiKeys={aiKeys}
+            keysLoading={aiKeysLoading}
+            keyChain={keyChain}
+            onKeyChainChange={setKeyChain}
+            prompt={aiPrompt}
+            onPromptChange={setAiPrompt}
+            required
+          />
+        )}
 
         <Section title="Photo Settings">
           <Field label="Orientation">

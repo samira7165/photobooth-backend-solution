@@ -31,6 +31,7 @@ export class CreateCampaignDto {
     prompt?: string;
     strength?: number;
     fallbackProviders?: string[];
+    keyChain?: string[]; // ordered ApiKeyModel ids: [primary, fallback1, fallback2, ...]
     allowCustomPrompt?: boolean;
     referenceImage?: string;
     aiBackgroundGeneration?: boolean;

@@ -22,7 +22,18 @@ export class AiProvidersService {
     return this.prisma.aiProvider.findMany({
       include: {
         apiKeys: {
-          select: { id: true, keyIdentifier: true, model: true, isActive: true, usageToday: true, usageTotal: true, dailyLimit: true, errorCount: true, lastUsedAt: true, lastErrorAt: true },
+          select: {
+            id: true,
+            keyIdentifier: true,
+            isActive: true,
+            usageToday: true,
+            usageTotal: true,
+            dailyLimit: true,
+            errorCount: true,
+            lastUsedAt: true,
+            lastErrorAt: true,
+            models: { select: { id: true, model: true, createdAt: true }, orderBy: { createdAt: 'asc' } },
+          },
         },
       },
       orderBy: { name: 'asc' },
@@ -60,7 +71,7 @@ export class AiProvidersService {
 
   // ─── API KEYS ───
 
-  async createApiKey(data: { providerId: string; keyIdentifier: string; apiKey: string; model?: string; dailyLimit?: number; campaignIds?: string[] }) {
+  async createApiKey(data: { providerId: string; keyIdentifier: string; apiKey: string; dailyLimit?: number; campaignIds?: string[] }) {
     // Verify provider exists
     const provider = await this.prisma.aiProvider.findUnique({ where: { id: data.providerId } });
     if (!provider) throw new NotFoundException('Provider not found');
@@ -72,7 +83,6 @@ export class AiProvidersService {
       data: {
         providerId: data.providerId,
         keyIdentifier: data.keyIdentifier,
-        model: data.model || null,
         encryptedKey,
         dailyLimit: data.dailyLimit || null,
       },
@@ -95,7 +105,6 @@ export class AiProvidersService {
     return {
       id: apiKey.id,
       keyIdentifier: apiKey.keyIdentifier,
-      model: apiKey.model,
       providerId: apiKey.providerId,
       isActive: apiKey.isActive,
       dailyLimit: apiKey.dailyLimit,
@@ -103,15 +112,43 @@ export class AiProvidersService {
     };
   }
 
-  async updateApiKey(id: string, data: { keyIdentifier?: string; model?: string; isActive?: boolean; dailyLimit?: number }) {
+  async updateApiKey(id: string, data: { keyIdentifier?: string; isActive?: boolean; dailyLimit?: number }) {
     const key = await this.prisma.apiKey.findUnique({ where: { id } });
     if (!key) throw new NotFoundException('API key not found');
 
     return this.prisma.apiKey.update({
       where: { id },
       data,
-      select: { id: true, keyIdentifier: true, model: true, isActive: true, dailyLimit: true, usageToday: true, usageTotal: true },
+      select: { id: true, keyIdentifier: true, isActive: true, dailyLimit: true, usageToday: true, usageTotal: true },
     });
+  }
+
+  // ─── API KEY MODELS ───
+  // The models a key's provider account can call — one secret (ApiKey), many
+  // candidate models a campaign's failover chain can pick between.
+
+  async addModelToKey(apiKeyId: string, model: string) {
+    const key = await this.prisma.apiKey.findUnique({ where: { id: apiKeyId } });
+    if (!key) throw new NotFoundException('API key not found');
+
+    const existing = await this.prisma.apiKeyModel.findUnique({
+      where: { apiKeyId_model: { apiKeyId, model } },
+    });
+    if (existing) {
+      throw new BadRequestException('This model is already added to this key');
+    }
+
+    return this.prisma.apiKeyModel.create({ data: { apiKeyId, model } });
+  }
+
+  async removeModelFromKey(apiKeyId: string, modelId: string) {
+    const model = await this.prisma.apiKeyModel.findUnique({ where: { id: modelId } });
+    if (!model || model.apiKeyId !== apiKeyId) {
+      throw new NotFoundException('Model not found for this key');
+    }
+
+    await this.prisma.apiKeyModel.delete({ where: { id: modelId } });
+    return { message: 'Model removed from key' };
   }
 
   async deleteApiKey(id: string) {

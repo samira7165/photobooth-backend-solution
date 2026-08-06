@@ -8,7 +8,7 @@ import { StorageService } from '../storage/storage.service';
 import { ImageService } from '../image/image.service';
 import { DeliveryService } from '../delivery/delivery.service';
 import { WebsocketGateway } from '../websocket/websocket.gateway';
-import { AiProvidersService } from '../ai-providers/ai-providers.service';
+import { ProcessingService } from './processing.service';
 import { PHOTO_PROCESSING_QUEUE } from '../queue/queue.service';
 
 interface ProcessSubmissionJobData {
@@ -28,7 +28,7 @@ export class ProcessingWorker extends WorkerHost {
     private imageService: ImageService,
     private deliveryService: DeliveryService,
     private websocketGateway: WebsocketGateway,
-    private aiProvidersService: AiProvidersService,
+    private processingService: ProcessingService,
   ) {
     super();
   }
@@ -59,6 +59,7 @@ export class ProcessingWorker extends WorkerHost {
     const photoSettings = (campaign.photoSettings as any) || {};
     let resultBuffer: Buffer;
     let mimeType: string;
+    let aiMeta: { provider: string; model: string; keyId: string; prompt?: string; tokensUsed?: number; costEstimate?: number } | undefined;
 
     if (submission.mode === 'non-ai') {
       const processed = await this.imageService.processNonAI(originalBuffer, {
@@ -78,12 +79,33 @@ export class ProcessingWorker extends WorkerHost {
       resultBuffer = processed.resultBuffer;
       mimeType = processed.mimeType;
     } else {
-      // AI generation isn't implemented yet. getKeyWithFailover() is real and
-      // does run here — proving key selection/failover works end to end —
-      // but there's no provider implementation yet to actually call with it.
-      const aiConfig = campaign.aiConfig as any;
-      await this.aiProvidersService.getKeyWithFailover(campaign.id, aiConfig?.provider ? [aiConfig.provider] : undefined);
-      throw new Error('AI provider not yet implemented');
+      const aiConfig = (campaign.aiConfig as any) || {};
+      const generation = await this.processingService.generate(campaign.id, originalBuffer, aiConfig);
+
+      const postProcessed = await this.imageService.postProcess(generation.resultBuffer, {
+        campaignId: campaign.id,
+        campaignSlug: campaign.slug,
+        submissionId,
+        frameId: submission.frameUsed || undefined,
+        propIds: (submission.propsUsed as string[]) || undefined,
+        orientation: submission.orientation || undefined,
+        outputWidth: photoSettings.outputWidth,
+        outputHeight: photoSettings.outputHeight,
+        brandConfig: campaign.brandConfig,
+        textConfig: campaign.textConfig,
+        qrConfig: campaign.qrConfig,
+      });
+      resultBuffer = postProcessed.resultBuffer;
+      mimeType = postProcessed.mimeType;
+
+      aiMeta = {
+        provider: generation.provider,
+        model: generation.model,
+        keyId: generation.keyId,
+        prompt: aiConfig.prompt,
+        tokensUsed: generation.tokensUsed,
+        costEstimate: generation.costEstimate,
+      };
     }
 
     this.websocketGateway.notifyJobStatusUpdate(submissionId, campaign.slug, { status: 'PROCESSING', progress: 60 });
@@ -117,7 +139,20 @@ export class ProcessingWorker extends WorkerHost {
     const processingTime = Date.now() - startedAt;
     await this.prisma.submission.update({
       where: { id: submissionId },
-      data: { status: 'COMPLETED', resultUrl, thumbnailUrl, processingTime },
+      data: {
+        status: 'COMPLETED',
+        resultUrl,
+        thumbnailUrl,
+        processingTime,
+        ...(aiMeta && {
+          aiProvider: aiMeta.provider,
+          aiModel: aiMeta.model,
+          apiKeyUsed: aiMeta.keyId,
+          promptUsed: aiMeta.prompt,
+          tokensUsed: aiMeta.tokensUsed,
+          costEstimate: aiMeta.costEstimate,
+        }),
+      },
     });
 
     this.websocketGateway.notifyJobStatusUpdate(submissionId, campaign.slug, {

@@ -3,6 +3,7 @@ import { AiProvidersService } from './ai-providers.service';
 import { CreateProviderDto } from './dto/create-provider.dto';
 import { CreateApiKeyDto } from './dto/create-api-key.dto';
 import { UpdateApiKeyDto } from './dto/update-api-key.dto';
+import { AddApiKeyModelDto } from './dto/add-api-key-model.dto';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
 
@@ -61,6 +62,16 @@ export class AiProvidersController {
   @Delete('keys/:id')
   async deleteApiKey(@Param('id') id: string) {
     return this.aiProvidersService.deleteApiKey(id);
+  }
+
+  @Post('keys/:keyId/models')
+  async addModelToKey(@Param('keyId') keyId: string, @Body() dto: AddApiKeyModelDto) {
+    return this.aiProvidersService.addModelToKey(keyId, dto.model);
+  }
+
+  @Delete('keys/:keyId/models/:modelId')
+  async removeModelFromKey(@Param('keyId') keyId: string, @Param('modelId') modelId: string) {
+    return this.aiProvidersService.removeModelFromKey(keyId, modelId);
   }
 
   @Post('keys/:keyId/link/:campaignId')

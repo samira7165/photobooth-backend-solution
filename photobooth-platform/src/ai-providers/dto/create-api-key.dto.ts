@@ -17,12 +17,6 @@ export class CreateApiKeyDto {
   @MinLength(4)
   apiKey: string;
 
-  // Which model this key calls, e.g. "gemini-2.5-flash-image" — informational
-  // only, not used by key selection/failover logic.
-  @IsOptional()
-  @IsString()
-  model?: string;
-
   @IsOptional()
   @IsInt()
   dailyLimit?: number;
