@@ -1,16 +1,18 @@
-import { IsString, IsOptional, IsArray, MinLength } from 'class-validator';
+import { IsString, IsOptional, IsArray, IsEmail, MaxLength, Matches } from 'class-validator';
 
 export class CreateSubmissionDto {
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   userName?: string;
 
   @IsOptional()
-  @IsString()
+  @IsEmail()
+  @MaxLength(255)
   userEmail?: string;
 
   @IsOptional()
-  @IsString()
+  @Matches(/^[0-9+\-\s()]{7,20}$/, { message: 'Invalid phone number format' })
   userPhone?: string;
 
   // Sent by the booth alongside the photo so it can be correlated with the
@@ -19,25 +21,31 @@ export class CreateSubmissionDto {
   // ValidationPipe's whitelist doesn't reject it as an unrecognized field.
   @IsOptional()
   @IsString()
+  @MaxLength(255)
   sessionId?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(255)
   backgroundId?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(255)
   frameId?: string;
 
   @IsOptional()
   @IsArray()
+  @IsString({ each: true })
   propIds?: string[];
 
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   styleUsed?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(20)
   orientation?: string; // "portrait" or "landscape"
 }

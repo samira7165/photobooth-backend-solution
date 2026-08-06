@@ -2,7 +2,9 @@ import { Controller, Get, Post, Patch, Delete, Body, Param, UseGuards } from '@n
 import { UsersService } from './users.service';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
-import { Role } from '@prisma/client';
+import { CreateUserDto } from './dto/create-user.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
 
 // Every route here needs a valid JWT (enforced globally by JwtAuthGuard) plus
 // the role listed on each handler (enforced by RolesGuard, which honors the
@@ -17,7 +19,7 @@ export class UsersController {
   // ADMIN can view/manage day-to-day but not grant privileges.
   @Post()
   @Roles('SUPER_ADMIN')
-  async create(@Body() body: { email: string; password: string; name: string; role?: Role }) {
+  async create(@Body() body: CreateUserDto) {
     return this.usersService.create(body);
   }
 
@@ -35,16 +37,13 @@ export class UsersController {
 
   @Patch(':id')
   @Roles('SUPER_ADMIN')
-  async update(
-    @Param('id') id: string,
-    @Body() body: { name?: string; role?: Role; isActive?: boolean },
-  ) {
+  async update(@Param('id') id: string, @Body() body: UpdateUserDto) {
     return this.usersService.update(id, body);
   }
 
   @Patch(':id/password')
   @Roles('SUPER_ADMIN')
-  async changePassword(@Param('id') id: string, @Body() body: { password: string }) {
+  async changePassword(@Param('id') id: string, @Body() body: ChangePasswordDto) {
     return this.usersService.changePassword(id, body.password);
   }
 

@@ -5,6 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import { CreateSubmissionDto } from './dto/create-submission.dto';
 import { v4 as uuid } from 'uuid';
 import sharp from 'sharp';
+import { ImageOptimizer } from '../common/utils/image-optimizer';
 import { WebsocketGateway } from '../websocket/websocket.gateway';
 import { QueueMonitorService } from '../queue/queue.service';
 
@@ -95,16 +96,29 @@ export class SubmissionsService {
       throw new BadRequestException('Invalid file type. Allowed: ' + allowedTypes.join(', '));
     }
 
+    // The Content-Type header above is client-supplied and trivially spoofed
+    // (rename a .txt to .jpg) — this actually decodes the file to confirm
+    // its real format, the same check AssetsService uses for backgrounds/
+    // frames/props.
+    const contentValidation = await ImageOptimizer.validateImage(file.buffer);
+    if (!contentValidation.valid) {
+      throw new BadRequestException('Uploaded file is not a valid image');
+    }
+
     // 4. Optimize the image before storing
     const photoSettings = (campaign.photoSettings as any) || {};
-    let optimizedBuffer = file.buffer;
+    let optimizedBuffer: Buffer;
+    // Auto-detected below from actual image dimensions when neither the
+    // booth nor the campaign specified one — previously computed here and
+    // then never read, so every submission silently fell back to 'portrait'
+    // regardless of the photo's real orientation.
+    let orientation: string;
 
     try {
       let sharpInstance = sharp(file.buffer);
       const metadata = await sharpInstance.metadata();
 
-      // Auto-detect orientation if not specified
-      const orientation = dto.orientation || photoSettings.orientation ||
+      orientation = dto.orientation || photoSettings.orientation ||
         (metadata.width > metadata.height ? 'landscape' : 'portrait');
 
       // Resize if larger than max dimensions (preserve aspect ratio)
@@ -127,6 +141,7 @@ export class SubmissionsService {
     } catch (err) {
       this.logger.warn('Image optimization failed, using original: ' + err.message);
       optimizedBuffer = file.buffer;
+      orientation = dto.orientation || photoSettings.orientation || 'portrait';
     }
 
     // 5. Upload original photo
@@ -173,7 +188,7 @@ export class SubmissionsService {
         backgroundUsed: dto.backgroundId || null,
         frameUsed: dto.frameId || null,
         propsUsed: dto.propIds || [],
-        orientation: dto.orientation || 'portrait',
+        orientation,
         styleUsed: dto.styleUsed || null,
       },
     });
@@ -367,7 +382,9 @@ export class SubmissionsService {
       for (const file of filesToDelete) {
         try {
           await fs.unlink(path.join(process.cwd(), 'uploads', file));
-        } catch {}
+        } catch {
+          // Best-effort cleanup — the file may already be gone; that's fine.
+        }
       }
     }
 

@@ -14,7 +14,7 @@ export class CreateApiKeyDto {
   // encrypts it (see common/utils/encryption.ts) before it's ever written to
   // the database.
   @IsString()
-  @MinLength(4)
+  @MinLength(10)
   apiKey: string;
 
   @IsOptional()

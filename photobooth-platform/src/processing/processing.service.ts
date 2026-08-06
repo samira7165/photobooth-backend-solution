@@ -171,7 +171,7 @@ export class ProcessingService {
       const responseTime = Date.now() - startedAt;
       this.logger.error(`Provider ${selected.providerName} failed: ${err.message}`);
       await this.aiProvidersService.recordKeyUsage(selected.keyId, false, responseTime, err.message);
-      throw new Error(`AI provider failed. provider=${selected.providerName} key=${selected.keyId}: ${err.message}`);
+      throw new Error(`AI provider failed. provider=${selected.providerName} key=${selected.keyId}: ${err.message}`, { cause: err });
     }
   }
 }

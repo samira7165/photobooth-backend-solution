@@ -1,16 +1,19 @@
-import { IsString, IsOptional, IsEnum, IsObject, IsArray, IsInt, IsNumber, IsDateString, MinLength } from 'class-validator';
+import { IsString, IsOptional, IsObject, IsArray, IsInt, IsNumber, IsDateString, MinLength, MaxLength } from 'class-validator';
 
 export class CreateCampaignDto {
   @IsString()
   @MinLength(2)
+  @MaxLength(255)
   name: string;
 
   @IsString()
   @MinLength(2)
+  @MaxLength(255)
   slug: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(20)
   processingMode?: string; // "ai", "non-ai", "both"
 
   @IsOptional()
@@ -95,6 +98,7 @@ export class CreateCampaignDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(20)
   outputMode?: string; // "qr", "download", "print", "sms", "email"
 
   @IsOptional()
