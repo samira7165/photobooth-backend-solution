@@ -5,6 +5,7 @@ import Link from 'next/link';
 import api from '@/lib/api';
 import DashboardLayout from '@/components/DashboardLayout';
 import StatusBadge from '@/components/StatusBadge';
+import { getSocket } from '@/lib/socket';
 import { formatDate, truncateId } from '@/lib/utils';
 
 function StatCard({ label, value, icon, accent }) {
@@ -31,6 +32,7 @@ export default function DashboardPage() {
     failedSubmissions: 0,
   });
   const [recentSubmissions, setRecentSubmissions] = useState([]);
+  const [toast, setToast] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -64,13 +66,47 @@ export default function DashboardPage() {
     }
 
     load();
+
+    // Live updates: a new submission triggers a full reload (cheap — 4 fast
+    // queries) plus a toast; a job status change patches just that row so
+    // the table doesn't jump/reload on every progress tick.
+    const socket = getSocket();
+
+    const onNewSubmission = (data) => {
+      setToast(`New submission from ${data.campaignSlug}`);
+      load();
+    };
+
+    const onJobUpdate = (data) => {
+      setRecentSubmissions((prev) =>
+        prev.map((s) => (s.id === data.submissionId ? { ...s, status: data.status } : s)),
+      );
+    };
+
+    socket.on('admin:new_submission', onNewSubmission);
+    socket.on('admin:job_update', onJobUpdate);
+
     return () => {
       cancelled = true;
+      socket.off('admin:new_submission', onNewSubmission);
+      socket.off('admin:job_update', onJobUpdate);
     };
   }, []);
 
+  useEffect(() => {
+    if (!toast) return;
+    const id = setTimeout(() => setToast(null), 4000);
+    return () => clearTimeout(id);
+  }, [toast]);
+
   return (
     <DashboardLayout title="Dashboard">
+      {toast && (
+        <div className="fixed top-5 right-5 z-50 bg-[#111111] border border-[#2563eb]/40 text-white text-sm rounded-lg px-4 py-3 shadow-2xl">
+          {toast}
+        </div>
+      )}
+
       {error && (
         <div className="mb-6 bg-red-500/10 border border-red-500/30 text-red-400 text-sm rounded-lg px-4 py-3">
           {error}

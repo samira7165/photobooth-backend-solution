@@ -15,15 +15,20 @@ import {
   Menu,
   X,
   FlaskConical,
+  BarChart3,
+  Zap,
 } from 'lucide-react';
 import { hasRole } from '@/lib/utils';
+import { disconnectSocket } from '@/lib/socket';
 
 const NAV_ITEMS = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/analytics', label: 'Analytics', icon: BarChart3 },
   { href: '/campaigns', label: 'Campaigns', icon: Megaphone },
   { href: '/assets', label: 'Assets', icon: ImageIcon },
   { href: '/providers', label: 'AI Providers', icon: Bot },
   { href: '/submissions', label: 'Submissions', icon: Camera },
+  { href: '/queue', label: 'Queue Monitor', icon: Zap },
   { href: '/users', label: 'Users', icon: Users, minRole: 'ADMIN' },
   { href: '/booth-test', label: 'Booth Test', icon: FlaskConical },
 ];
@@ -34,6 +39,7 @@ export default function Sidebar({ user }) {
   const [open, setOpen] = useState(false);
 
   const handleLogout = () => {
+    disconnectSocket();
     Cookies.remove('accessToken');
     Cookies.remove('refreshToken');
     router.push('/login');
