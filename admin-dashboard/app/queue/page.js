@@ -1,10 +1,11 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { Download } from 'lucide-react';
 import api from '@/lib/api';
 import DashboardLayout from '@/components/DashboardLayout';
 import useCurrentUser from '@/lib/useCurrentUser';
-import { hasRole, timeAgo, truncateId } from '@/lib/utils';
+import { hasRole, timeAgo, truncateId, resolveImageUrl } from '@/lib/utils';
 
 const POLL_INTERVAL_MS = 3000;
 
@@ -16,6 +17,7 @@ export default function QueueMonitorPage() {
   const [active, setActive] = useState([]);
   const [waiting, setWaiting] = useState([]);
   const [failed, setFailed] = useState([]);
+  const [completed, setCompleted] = useState([]);
   const [clients, setClients] = useState(null);
   const [error, setError] = useState('');
   const [controlBusy, setControlBusy] = useState(false);
@@ -23,17 +25,19 @@ export default function QueueMonitorPage() {
 
   const load = async () => {
     try {
-      const [statsRes, activeRes, waitingRes, failedRes, clientsRes] = await Promise.all([
+      const [statsRes, activeRes, waitingRes, failedRes, completedRes, clientsRes] = await Promise.all([
         api.get('/admin/queue/stats'),
         api.get('/admin/queue/active'),
         api.get('/admin/queue/waiting'),
         api.get('/admin/queue/failed'),
+        api.get('/admin/queue/completed'),
         api.get('/admin/queue/clients'),
       ]);
       setStats(statsRes.data);
       setActive(activeRes.data);
       setWaiting(waitingRes.data);
       setFailed(failedRes.data);
+      setCompleted(completedRes.data);
       setClients(clientsRes.data);
       setError('');
     } catch (err) {
@@ -157,8 +161,9 @@ export default function QueueMonitorPage() {
                   <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden mb-1.5">
                     <div className="h-full bg-[#3b82f6] rounded-full transition-all" style={{ width: `${job.progress}%` }} />
                   </div>
-                  <div className="text-xs text-gray-500">
-                    {job.progress}% · started {job.startedAt ? elapsedFrom(job.startedAt) : '—'}
+                  <div className="flex items-center justify-between text-xs text-gray-500">
+                    <span>{job.progress}% · started {job.startedAt ? elapsedFrom(job.startedAt) : '—'}</span>
+                    <DownloadLink url={job.originalUrl} label="Original" />
                   </div>
                 </div>
               ))}
@@ -186,6 +191,44 @@ export default function QueueMonitorPage() {
 
       <div className="bg-[#111111] border border-white/10 rounded-xl overflow-hidden mb-8">
         <div className="px-5 py-4 border-b border-white/10">
+          <h2 className="text-sm font-semibold text-white uppercase tracking-wide">Recently Completed</h2>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-gray-400 border-b border-white/10">
+                <th className="px-5 py-2.5 font-medium">Submission ID</th>
+                <th className="px-5 py-2.5 font-medium">Campaign</th>
+                <th className="px-5 py-2.5 font-medium">Mode</th>
+                <th className="px-5 py-2.5 font-medium">Finished</th>
+                <th className="px-5 py-2.5 font-medium">Original</th>
+                <th className="px-5 py-2.5 font-medium">Result</th>
+              </tr>
+            </thead>
+            <tbody>
+              {completed.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="px-5 py-8 text-center text-gray-500">No completed jobs yet</td>
+                </tr>
+              ) : (
+                completed.map((job) => (
+                  <tr key={job.jobId} className="border-b border-white/5 last:border-0">
+                    <td className="px-5 py-2.5 font-mono text-gray-300">{truncateId(job.submissionId)}</td>
+                    <td className="px-5 py-2.5 text-gray-300">{job.campaignName || '—'}</td>
+                    <td className="px-5 py-2.5 text-gray-400">{job.mode || '—'}</td>
+                    <td className="px-5 py-2.5 text-gray-400">{job.finishedAt ? timeAgo(job.finishedAt) : '—'}</td>
+                    <td className="px-5 py-2.5"><DownloadLink url={job.originalUrl} label="Original" /></td>
+                    <td className="px-5 py-2.5"><DownloadLink url={job.resultUrl} label="Result" /></td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="bg-[#111111] border border-white/10 rounded-xl overflow-hidden mb-8">
+        <div className="px-5 py-4 border-b border-white/10">
           <h2 className="text-sm font-semibold text-white uppercase tracking-wide">Failed Jobs</h2>
         </div>
         <div className="overflow-x-auto">
@@ -197,13 +240,14 @@ export default function QueueMonitorPage() {
                 <th className="px-5 py-2.5 font-medium">Failed Reason</th>
                 <th className="px-5 py-2.5 font-medium">Attempts</th>
                 <th className="px-5 py-2.5 font-medium">Time</th>
+                <th className="px-5 py-2.5 font-medium">Photo</th>
                 {canControl && <th className="px-5 py-2.5 font-medium">Actions</th>}
               </tr>
             </thead>
             <tbody>
               {failed.length === 0 ? (
                 <tr>
-                  <td colSpan={canControl ? 6 : 5} className="px-5 py-8 text-center text-gray-500">No failed jobs</td>
+                  <td colSpan={canControl ? 7 : 6} className="px-5 py-8 text-center text-gray-500">No failed jobs</td>
                 </tr>
               ) : (
                 failed.map((job) => (
@@ -213,6 +257,7 @@ export default function QueueMonitorPage() {
                     <td className="px-5 py-2.5 text-red-400 max-w-xs truncate" title={job.failedReason}>{job.failedReason || '—'}</td>
                     <td className="px-5 py-2.5 text-gray-400">{job.attemptsMade}</td>
                     <td className="px-5 py-2.5 text-gray-400">{timeAgo(job.queuedAt)}</td>
+                    <td className="px-5 py-2.5"><DownloadLink url={job.originalUrl} label="Original" /></td>
                     {canControl && (
                       <td className="px-5 py-2.5">
                         <div className="flex gap-2">
@@ -264,6 +309,21 @@ function elapsedFrom(iso) {
   const secs = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
   if (secs < 60) return `${secs}s ago`;
   return `${Math.round(secs / 60)}m ago`;
+}
+
+function DownloadLink({ url, label }) {
+  if (!url) return <span className="text-gray-600 text-xs">—</span>;
+  return (
+    <a
+      href={resolveImageUrl(url)}
+      download
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center gap-1 text-xs text-[#2563eb] hover:underline"
+    >
+      <Download size={12} /> {label}
+    </a>
+  );
 }
 
 function StatCard({ label, value, accent }) {

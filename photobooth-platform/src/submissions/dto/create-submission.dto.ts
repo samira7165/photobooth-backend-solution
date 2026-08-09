@@ -1,4 +1,5 @@
 import { IsString, IsOptional, IsArray, IsEmail, MaxLength, Matches } from 'class-validator';
+import { Transform } from 'class-transformer';
 
 export class CreateSubmissionDto {
   @IsOptional()
@@ -34,7 +35,19 @@ export class CreateSubmissionDto {
   @MaxLength(255)
   frameId?: string;
 
+  // Which AI reference-image/style Template the booth user picked (AI mode
+  // only — ignored for non-AI submissions).
   @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  templateId?: string;
+
+  // multipart/form-data collapses a single repeated field down to a bare
+  // string instead of a one-element array (multiple occurrences of the same
+  // field name is what produces an array) — normalize before @IsArray() runs
+  // so picking exactly one prop doesn't fail validation.
+  @IsOptional()
+  @Transform(({ value }) => (value === undefined ? value : Array.isArray(value) ? value : [value]))
   @IsArray()
   @IsString({ each: true })
   propIds?: string[];

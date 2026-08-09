@@ -130,7 +130,7 @@ export default function AiModelConfigSection({
             </div>
 
             {fallbackKeyIds.length === 0 ? (
-              <p className="text-xs text-gray-500">No fallbacks configured — the primary model is the only attempt.</p>
+              <p className="text-xs text-gray-500">No fallbacks configured  the primary model is the only attempt.</p>
             ) : (
               <div className="space-y-2">
                 {fallbackKeyIds.map((value, index) => (

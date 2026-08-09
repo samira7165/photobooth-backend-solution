@@ -11,6 +11,7 @@ import SubmissionsTab from '@/components/SubmissionsTab';
 import useCurrentUser from '@/lib/useCurrentUser';
 import { hasRole, CAMPAIGN_STATUS_TRANSITIONS, formatDate } from '@/lib/utils';
 import AiModelConfigSection, { flattenProviderKeys, keyLabel } from '@/components/AiModelConfigSection';
+import { EnabledAssetGrid } from '@/components/StagedAssetSection';
 
 const TABS = ['Overview', 'Assets', 'Submissions'];
 
@@ -309,6 +310,11 @@ function EditCampaignModal({ open, onClose, campaign, onSaved }) {
   const [aiPrompt, setAiPrompt] = useState('');
   const [originalChain, setOriginalChain] = useState([]);
 
+  const [backgroundsEnabled, setBackgroundsEnabled] = useState(false);
+  const [framesEnabled, setFramesEnabled] = useState(false);
+  const [propsEnabled, setPropsEnabled] = useState(false);
+  const [templatesEnabled, setTemplatesEnabled] = useState(false);
+
   useEffect(() => {
     api
       .get('/ai-providers')
@@ -326,12 +332,18 @@ function EditCampaignModal({ open, onClose, campaign, onSaved }) {
         outputWidth: campaign.photoSettings?.outputWidth || 1080,
         outputHeight: campaign.photoSettings?.outputHeight || 1920,
         outputMode: campaign.outputMode,
+        backgroundRemoval: campaign.backgroundConfig?.removal || false,
       });
 
       const chain = (campaign.aiConfig?.keyChain || []).filter(Boolean);
       setKeyChain(chain.length > 0 ? chain : ['']);
       setAiPrompt(campaign.aiConfig?.prompt || '');
       setOriginalChain(chain);
+
+      setBackgroundsEnabled(campaign.backgroundConfig?.enabled || false);
+      setFramesEnabled(campaign.frameConfig?.enabled || false);
+      setPropsEnabled(campaign.propConfig?.enabled || false);
+      setTemplatesEnabled(campaign.aiConfig?.templatesEnabled || campaign.templates?.length > 0 || false);
     }
   }, [campaign]);
 
@@ -384,11 +396,19 @@ function EditCampaignModal({ open, onClose, campaign, onSaved }) {
           outputHeight: Number(form.outputHeight),
         },
         outputMode: form.outputMode,
+        backgroundConfig: {
+          ...campaign.backgroundConfig,
+          enabled: backgroundsEnabled,
+          removal: form.backgroundRemoval,
+        },
+        frameConfig: { ...campaign.frameConfig, enabled: framesEnabled },
+        propConfig: { ...campaign.propConfig, enabled: propsEnabled },
         ...(aiModeSelected && {
           aiConfig: {
             prompt: aiPrompt,
             keyChain: chain,
             fallbackProviders: chain.map((id) => aiKeys.find((k) => k.id === id)?.providerName).filter(Boolean),
+            templatesEnabled,
           },
         }),
       });
@@ -444,6 +464,62 @@ function EditCampaignModal({ open, onClose, campaign, onSaved }) {
             onPromptChange={setAiPrompt}
             required
           />
+        )}
+
+        <div className="space-y-3 border-t border-white/10 pt-4">
+          <EnabledAssetGrid
+            kind="backgrounds"
+            enabled={backgroundsEnabled}
+            onEnabledChange={setBackgroundsEnabled}
+            campaignId={campaign.id}
+            canManage
+          />
+          <label className="flex items-start gap-2.5 text-sm text-gray-300">
+            <input
+              type="checkbox"
+              checked={form.backgroundRemoval}
+              onChange={(e) => setForm((f) => ({ ...f, backgroundRemoval: e.target.checked }))}
+              className="mt-0.5 rounded border-white/20 bg-[#0a0a0a] text-[#2563eb] focus:ring-[#2563eb]"
+            />
+            <span>
+              Remove/change background
+              <span className="block text-xs text-gray-500 mt-0.5">
+                Applies to both AI and non-AI submissions.
+              </span>
+            </span>
+          </label>
+        </div>
+
+        <div className="border-t border-white/10 pt-4">
+          <EnabledAssetGrid
+            kind="frames"
+            enabled={framesEnabled}
+            onEnabledChange={setFramesEnabled}
+            campaignId={campaign.id}
+            canManage
+          />
+        </div>
+
+        <div className="border-t border-white/10 pt-4">
+          <EnabledAssetGrid
+            kind="props"
+            enabled={propsEnabled}
+            onEnabledChange={setPropsEnabled}
+            campaignId={campaign.id}
+            canManage
+          />
+        </div>
+
+        {aiModeSelected && (
+          <div className="border-t border-white/10 pt-4">
+            <EnabledAssetGrid
+              kind="templates"
+              enabled={templatesEnabled}
+              onEnabledChange={setTemplatesEnabled}
+              campaignId={campaign.id}
+              canManage
+            />
+          </div>
         )}
 
         <div>

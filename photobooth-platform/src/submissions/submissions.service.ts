@@ -187,6 +187,7 @@ export class SubmissionsService {
         mode,
         backgroundUsed: dto.backgroundId || null,
         frameUsed: dto.frameId || null,
+        templateUsed: dto.templateId || null,
         propsUsed: dto.propIds || [],
         orientation,
         styleUsed: dto.styleUsed || null,
@@ -392,3 +393,5 @@ export class SubmissionsService {
     return { message: 'Submission deleted' };
   }
 }
+
+

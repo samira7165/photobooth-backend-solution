@@ -77,6 +77,7 @@ model Campaign {
   backgrounds     Background[]
   frames          Frame[]
   props           Prop[]
+  templates       Template[]
   apiKeyLinks     CampaignApiKey[]
 
   @@index([slug])
@@ -148,6 +149,32 @@ model Prop {
   @@map("props")
 }
 
+// ─── AI TEMPLATES ───
+// A booth-selectable "style" for AI mode (e.g. "Classic Spiderman suit" vs
+// "Miles Morales suit") — the booth shows these like backgrounds/frames/
+// props, and the chosen one's image is sent to the AI provider alongside
+// the user's photo as a style reference. `prompt` is optional: if every
+// template on a campaign leaves it blank, the campaign's aiConfig.prompt
+// is used for all of them; a template with its own prompt overrides that
+// campaign default for just that one.
+
+model Template {
+  id            String    @id @default(uuid())
+  campaignId    String
+  name          String
+  imageUrl      String    // S3 key — sent to the AI provider as a reference image
+  thumbnailUrl  String?   // S3 key for the booth-facing preview
+  prompt        String?   @db.Text
+  sortOrder     Int       @default(0)
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+
+  campaign      Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId])
+  @@map("templates")
+}
+
 // ─── SUBMISSIONS ───
 
 enum SubmissionStatus {
@@ -179,6 +206,7 @@ model Submission {
   backgroundUsed  String?           // background ID or "custom" or "ai-generated"
   frameUsed       String?           // frame ID or null
   propsUsed       Json?             // array of prop IDs used
+  templateUsed    String?           // Template ID (AI reference image + style prompt), or null
   orientation     String?           // "portrait" or "landscape"
 
   // AI specific
@@ -189,7 +217,7 @@ model Submission {
   apiKeyUsed      String?           // key identifier (NOT actual key)
   tokensUsed      Int?
   costEstimate    Float?
-  referenceImageUrl String?
+  referenceImageUrl String?         // the used Template's image URL, sent to the AI provider alongside the booth photo
 
   // Job tracking
   processingTime  Int?              // milliseconds

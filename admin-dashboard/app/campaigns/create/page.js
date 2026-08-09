@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import api from '@/lib/api';
 import DashboardLayout from '@/components/DashboardLayout';
 import AiModelConfigSection, { flattenProviderKeys } from '@/components/AiModelConfigSection';
+import { StagedAssetSection, uploadStagedItems } from '@/components/StagedAssetSection';
 
 function slugify(value) {
   return value
@@ -35,12 +36,22 @@ export default function CreateCampaignPage() {
     backgroundColor: '#ffffff',
     collectFields: ['name', 'phone'],
     outputMode: 'qr',
+    backgroundRemoval: false,
   });
 
   const [aiKeys, setAiKeys] = useState([]);
   const [aiKeysLoading, setAiKeysLoading] = useState(true);
   const [keyChain, setKeyChain] = useState(['']);
   const [aiPrompt, setAiPrompt] = useState('');
+
+  const [backgroundsEnabled, setBackgroundsEnabled] = useState(false);
+  const [backgroundsItems, setBackgroundsItems] = useState([]);
+  const [framesEnabled, setFramesEnabled] = useState(false);
+  const [framesItems, setFramesItems] = useState([]);
+  const [propsEnabled, setPropsEnabled] = useState(false);
+  const [propsItems, setPropsItems] = useState([]);
+  const [templatesEnabled, setTemplatesEnabled] = useState(false);
+  const [templatesItems, setTemplatesItems] = useState([]);
 
   useEffect(() => {
     api
@@ -104,12 +115,28 @@ export default function CreateCampaignPage() {
           secondaryColor: form.secondaryColor,
           backgroundColor: form.backgroundColor,
         },
+        backgroundConfig: {
+          enabled: backgroundsEnabled,
+          removal: form.backgroundRemoval,
+          allowCustomUpload: false,
+        },
+        frameConfig: { enabled: framesEnabled },
+        propConfig: { enabled: propsEnabled },
         ...(aiConfig && { aiConfig }),
         collectFields: form.collectFields,
         outputMode: form.outputMode,
       });
 
       const campaignId = res.data.id;
+
+      // Staged assets couldn't be uploaded until just now — they need a real
+      // campaign ID, which didn't exist until the POST above succeeded.
+      await Promise.allSettled([
+        backgroundsEnabled && backgroundsItems.length > 0 && uploadStagedItems('backgrounds', campaignId, backgroundsItems),
+        framesEnabled && framesItems.length > 0 && uploadStagedItems('frames', campaignId, framesItems),
+        propsEnabled && propsItems.length > 0 && uploadStagedItems('props', campaignId, propsItems),
+        templatesEnabled && templatesItems.length > 0 && uploadStagedItems('templates', campaignId, templatesItems),
+      ]);
 
       // chain entries are ApiKeyModel ids (one key can appear more than once
       // under different models) — link the underlying key once per unique
@@ -226,6 +253,63 @@ export default function CreateCampaignPage() {
             </Field>
           </div>
         </Section>
+
+        <Section title="Backgrounds">
+          <StagedAssetSection
+            kind="backgrounds"
+            enabled={backgroundsEnabled}
+            onEnabledChange={setBackgroundsEnabled}
+            items={backgroundsItems}
+            onItemsChange={setBackgroundsItems}
+          />
+          <label className="flex items-start gap-2.5 text-sm text-gray-300 pt-1 border-t border-white/5">
+            <input
+              type="checkbox"
+              checked={form.backgroundRemoval}
+              onChange={(e) => setForm((f) => ({ ...f, backgroundRemoval: e.target.checked }))}
+              className="mt-0.5 rounded border-white/20 bg-[#0a0a0a] text-[#2563eb] focus:ring-[#2563eb]"
+            />
+            <span>
+              Remove/change background
+              <span className="block text-xs text-gray-500 mt-0.5">
+                Applies to both AI and non-AI submissions; for AI mode, the swap happens before
+                the photo is sent for generation.
+              </span>
+            </span>
+          </label>
+        </Section>
+
+        <Section title="Frames">
+          <StagedAssetSection
+            kind="frames"
+            enabled={framesEnabled}
+            onEnabledChange={setFramesEnabled}
+            items={framesItems}
+            onItemsChange={setFramesItems}
+          />
+        </Section>
+
+        <Section title="Props">
+          <StagedAssetSection
+            kind="props"
+            enabled={propsEnabled}
+            onEnabledChange={setPropsEnabled}
+            items={propsItems}
+            onItemsChange={setPropsItems}
+          />
+        </Section>
+
+        {aiModeSelected && (
+          <Section title="AI Templates">
+            <StagedAssetSection
+              kind="templates"
+              enabled={templatesEnabled}
+              onEnabledChange={setTemplatesEnabled}
+              items={templatesItems}
+              onItemsChange={setTemplatesItems}
+            />
+          </Section>
+        )}
 
         <Section title="Brand Config">
           <div className="grid grid-cols-3 gap-4">

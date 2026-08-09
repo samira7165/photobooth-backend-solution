@@ -38,6 +38,11 @@ export class QueueController {
     return this.queueService.getFailedJobs();
   }
 
+  @Get('completed')
+  async getCompleted() {
+    return this.queueService.getCompletedJobs();
+  }
+
   @Post('pause')
   async pause() {
     return this.queueService.pauseQueue();

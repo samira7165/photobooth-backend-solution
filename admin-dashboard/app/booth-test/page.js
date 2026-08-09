@@ -24,6 +24,11 @@ export default function BoothTestPage() {
   const [cameraError, setCameraError] = useState('');
   const [cameraActive, setCameraActive] = useState(false);
 
+  const [backgroundId, setBackgroundId] = useState('');
+  const [frameId, setFrameId] = useState('');
+  const [propIds, setPropIds] = useState([]);
+  const [templateId, setTemplateId] = useState('');
+
   const [formFields, setFormFields] = useState({ userName: '', userPhone: '', userEmail: '' });
   const [submitError, setSubmitError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -147,6 +152,26 @@ export default function BoothTestPage() {
   // ─── submit ───
 
   const collectFields = boothConfig?.collectFields || [];
+  const showBackgroundPicker = boothConfig?.backgroundConfig?.enabled && (boothConfig?.backgrounds?.length || 0) > 0;
+  const showFramePicker = boothConfig?.frameConfig?.enabled && (boothConfig?.frames?.length || 0) > 0;
+  const showPropPicker = boothConfig?.propConfig?.enabled && (boothConfig?.props?.length || 0) > 0;
+  const showTemplatePicker = (boothConfig?.templates?.length || 0) > 0;
+
+  // Steps are numbered dynamically since which optional sections appear
+  // (background/frame/prop/template pickers, required-info fields) depends
+  // on this campaign's config.
+  let stepCounter = 1; // "Choose a campaign" is always step 1
+  const photoStep = ++stepCounter;
+  const backgroundStep = showBackgroundPicker ? ++stepCounter : null;
+  const frameStep = showFramePicker ? ++stepCounter : null;
+  const propStep = showPropPicker ? ++stepCounter : null;
+  const templateStep = showTemplatePicker ? ++stepCounter : null;
+  const fieldsStep = collectFields.length > 0 ? ++stepCounter : null;
+  const submitStep = ++stepCounter;
+
+  const togglePropId = (id) => {
+    setPropIds((prev) => (prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]));
+  };
 
   const handleSubmit = async () => {
     setSubmitError('');
@@ -169,6 +194,10 @@ export default function BoothTestPage() {
       if (formFields.userPhone) fd.append('userPhone', formFields.userPhone);
       if (formFields.userEmail) fd.append('userEmail', formFields.userEmail);
       if (sessionId) fd.append('sessionId', sessionId);
+      if (backgroundId) fd.append('backgroundId', backgroundId);
+      if (frameId) fd.append('frameId', frameId);
+      propIds.forEach((id) => fd.append('propIds', id));
+      if (templateId) fd.append('templateId', templateId);
       fd.append('photo', photoBlob, 'test-photo.jpg');
 
       const res = await api.post(`/submissions/booth/${campaignSlug}/submit`, fd, {
@@ -204,7 +233,6 @@ export default function BoothTestPage() {
 
     pollRef.current = setInterval(poll, POLL_MS);
     return () => clearInterval(pollRef.current);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [submission?.submissionId]);
 
   const resetTest = () => {
@@ -214,6 +242,10 @@ export default function BoothTestPage() {
     setSubmission(null);
     setSubmitError('');
     setSessionId(null);
+    setBackgroundId('');
+    setFrameId('');
+    setPropIds([]);
+    setTemplateId('');
   };
 
   return (
@@ -260,8 +292,8 @@ export default function BoothTestPage() {
 
         {boothConfig && (
           <>
-            {/* Step 2: photo */}
-            <Section step={2} title="Take or upload a photo">
+            {/* Photo */}
+            <Section step={photoStep} title="Take or upload a photo">
               {!photoPreviewUrl ? (
                 <div className="space-y-3">
                   {cameraActive ? (
@@ -329,9 +361,132 @@ export default function BoothTestPage() {
               )}
             </Section>
 
-            {/* Step 3: fields */}
+            {showBackgroundPicker && (
+              <Section step={backgroundStep} title="Choose a background (optional)">
+                <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setBackgroundId('')}
+                    className={`aspect-square rounded-lg border-2 flex items-center justify-center text-xs text-gray-400 transition-colors ${
+                      backgroundId === '' ? 'border-[#2563eb] bg-[#2563eb]/10' : 'border-white/10 bg-[#0a0a0a] hover:border-white/30'
+                    }`}
+                  >
+                    None
+                  </button>
+                  {boothConfig.backgrounds.map((bg) => (
+                    <button
+                      type="button"
+                      key={bg.id}
+                      onClick={() => setBackgroundId(bg.id)}
+                      className={`aspect-square rounded-lg border-2 overflow-hidden relative ${
+                        backgroundId === bg.id ? 'border-[#2563eb]' : 'border-white/10 hover:border-white/30'
+                      }`}
+                      title={bg.name}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={resolveImageUrl(bg.thumbnailUrl || bg.imageUrl)}
+                        alt={bg.name}
+                        className="w-full h-full object-cover"
+                      />
+                    </button>
+                  ))}
+                </div>
+              </Section>
+            )}
+
+            {showFramePicker && (
+              <Section step={frameStep} title="Choose a frame (optional)">
+                <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setFrameId('')}
+                    className={`aspect-square rounded-lg border-2 flex items-center justify-center text-xs text-gray-400 transition-colors ${
+                      frameId === '' ? 'border-[#2563eb] bg-[#2563eb]/10' : 'border-white/10 bg-[#0a0a0a] hover:border-white/30'
+                    }`}
+                  >
+                    None
+                  </button>
+                  {boothConfig.frames.map((fr) => (
+                    <button
+                      type="button"
+                      key={fr.id}
+                      onClick={() => setFrameId(fr.id)}
+                      className={`aspect-square rounded-lg border-2 overflow-hidden relative ${
+                        frameId === fr.id ? 'border-[#2563eb]' : 'border-white/10 hover:border-white/30'
+                      }`}
+                      title={fr.name}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={resolveImageUrl(fr.thumbnailUrl || fr.imageUrl)}
+                        alt={fr.name}
+                        className="w-full h-full object-cover"
+                      />
+                    </button>
+                  ))}
+                </div>
+              </Section>
+            )}
+
+            {showPropPicker && (
+              <Section step={propStep} title="Choose props (optional, pick any number)">
+                <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
+                  {boothConfig.props.map((prop) => (
+                    <button
+                      type="button"
+                      key={prop.id}
+                      onClick={() => togglePropId(prop.id)}
+                      className={`aspect-square rounded-lg border-2 overflow-hidden relative ${
+                        propIds.includes(prop.id) ? 'border-[#2563eb]' : 'border-white/10 hover:border-white/30'
+                      }`}
+                      title={prop.name}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={resolveImageUrl(prop.thumbnailUrl || prop.imageUrl)}
+                        alt={prop.name}
+                        className="w-full h-full object-cover"
+                      />
+                      {propIds.includes(prop.id) && (
+                        <span className="absolute top-1 right-1 bg-[#2563eb] text-white text-[10px] w-4 h-4 rounded-full flex items-center justify-center">✓</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </Section>
+            )}
+
+            {showTemplatePicker && (
+              <Section step={templateStep} title="Choose a style (which one do you want?)">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  {boothConfig.templates.map((tpl) => (
+                    <button
+                      type="button"
+                      key={tpl.id}
+                      onClick={() => setTemplateId(tpl.id === templateId ? '' : tpl.id)}
+                      className={`rounded-lg border-2 overflow-hidden text-left ${
+                        templateId === tpl.id ? 'border-[#2563eb]' : 'border-white/10 hover:border-white/30'
+                      }`}
+                    >
+                      <div className="aspect-square bg-[#0a0a0a]">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={resolveImageUrl(tpl.thumbnailUrl || tpl.imageUrl)}
+                          alt={tpl.name}
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+                      <div className="px-2 py-1.5 text-xs text-white truncate">{tpl.name}</div>
+                    </button>
+                  ))}
+                </div>
+              </Section>
+            )}
+
+            {/* Fields */}
             {collectFields.length > 0 && (
-              <Section step={3} title="Fill required info">
+              <Section step={fieldsStep} title="Fill required info">
                 <div className="space-y-3">
                   {collectFields.includes('name') && (
                     <Field label="Name" value={formFields.userName} onChange={(v) => setFormFields((f) => ({ ...f, userName: v }))} />
@@ -346,8 +501,8 @@ export default function BoothTestPage() {
               </Section>
             )}
 
-            {/* Step 4: submit */}
-            <Section step={collectFields.length > 0 ? 4 : 3} title="Submit">
+            {/* Submit */}
+            <Section step={submitStep} title="Submit">
               {!sessionId && (
                 <div className="mb-3">
                   <button

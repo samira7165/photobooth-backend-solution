@@ -59,7 +59,7 @@ export class ProcessingWorker extends WorkerHost {
     const photoSettings = (campaign.photoSettings as any) || {};
     let resultBuffer: Buffer;
     let mimeType: string;
-    let aiMeta: { provider: string; model: string; keyId: string; prompt?: string; tokensUsed?: number; costEstimate?: number } | undefined;
+    let aiMeta: { provider: string; model: string; keyId: string; prompt?: string; tokensUsed?: number; costEstimate?: number; referenceImageUrl?: string } | undefined;
 
     if (submission.mode === 'non-ai') {
       const processed = await this.imageService.processNonAI(originalBuffer, {
@@ -80,7 +80,57 @@ export class ProcessingWorker extends WorkerHost {
       mimeType = processed.mimeType;
     } else {
       const aiConfig = (campaign.aiConfig as any) || {};
-      const generation = await this.processingService.generate(campaign.id, originalBuffer, aiConfig);
+
+      // If a background swap is configured, apply it to the *original* photo
+      // before generation — not after. removeBackground() is a simple
+      // near-white-pixel keyer (see its own comment), which only works
+      // against the plain backdrop a booth photo is shot on; running it on
+      // an already AI-transformed image (arbitrary generated background, no
+      // clean backdrop to key out) wouldn't work. This way "change the
+      // background" behaves the same — and uses the same code — for both
+      // modes: the swap happens once, upstream of whatever mode-specific
+      // work follows.
+      let generationInput = originalBuffer;
+      if (campaign.backgroundConfig && (campaign.backgroundConfig as any).removal && submission.backgroundUsed) {
+        try {
+          const isolated = await this.imageService.removeBackground(originalBuffer);
+          generationInput = await this.imageService.compositeOnBackground(
+            isolated,
+            submission.backgroundUsed,
+            photoSettings.outputWidth || 1080,
+            photoSettings.outputHeight || 1920,
+          );
+        } catch (err: any) {
+          this.logger.warn(`Background swap before AI generation failed, using original photo: ${err.message}`);
+          generationInput = originalBuffer;
+        }
+      }
+
+      // A Template is the booth user's chosen reference style (e.g. which
+      // Spider-Man suit) — its image goes to the AI provider as a second,
+      // style-reference image, and its own prompt (if set) overrides the
+      // campaign's default for just this submission.
+      let referenceImageBuffer: Buffer | undefined;
+      let template: { id: string; name: string; imageUrl: string; prompt: string | null } | null = null;
+      if (submission.templateUsed) {
+        template = await this.prisma.template.findUnique({
+          where: { id: submission.templateUsed },
+          select: { id: true, name: true, imageUrl: true, prompt: true },
+        });
+        if (template) {
+          try {
+            referenceImageBuffer = await this.imageService.loadAssetImage(template.imageUrl);
+            this.logger.log(`Submission ${submissionId} using template "${template.name}" (${template.id}) — reference image loaded from ${template.imageUrl}`);
+          } catch (err: any) {
+            this.logger.warn(`Failed to load template reference image, continuing without it: ${err.message}`);
+          }
+        } else {
+          this.logger.warn(`Submission ${submissionId} references template ${submission.templateUsed}, but it no longer exists`);
+        }
+      }
+      const effectiveAiConfig = { ...aiConfig, prompt: template?.prompt || aiConfig.prompt };
+
+      const generation = await this.processingService.generate(campaign.id, generationInput, effectiveAiConfig, referenceImageBuffer);
 
       const postProcessed = await this.imageService.postProcess(generation.resultBuffer, {
         campaignId: campaign.id,
@@ -102,9 +152,10 @@ export class ProcessingWorker extends WorkerHost {
         provider: generation.provider,
         model: generation.model,
         keyId: generation.keyId,
-        prompt: aiConfig.prompt,
+        prompt: effectiveAiConfig.prompt,
         tokensUsed: generation.tokensUsed,
         costEstimate: generation.costEstimate,
+        referenceImageUrl: template?.imageUrl,
       };
     }
 
@@ -151,6 +202,7 @@ export class ProcessingWorker extends WorkerHost {
           promptUsed: aiMeta.prompt,
           tokensUsed: aiMeta.tokensUsed,
           costEstimate: aiMeta.costEstimate,
+          referenceImageUrl: aiMeta.referenceImageUrl,
         }),
       },
     });

@@ -17,6 +17,11 @@ export class DalleProvider implements AiProvider {
     const model = input.model || DEFAULT_MODEL;
     const startedAt = Date.now();
 
+    // input.referenceImageBuffer (a Template's style-reference image) is
+    // deliberately not sent here — images/edits only accepts one input
+    // image, with no way to say "match the style of this second image" the
+    // way Gemini's multi-image generateContent does. A template's prompt
+    // text is still used, just without the visual reference backing it.
     const form = new FormData();
     form.append('model', model);
     form.append('prompt', input.prompt);

@@ -14,7 +14,7 @@ const MIME_EXT: Record<string, string> = {
   'image/webp': 'webp',
 };
 
-type AssetKind = 'backgrounds' | 'frames' | 'props';
+type AssetKind = 'backgrounds' | 'frames' | 'props' | 'templates';
 
 interface AssetCreateInput {
   campaignId: string;
@@ -22,6 +22,7 @@ interface AssetCreateInput {
   sortOrder?: number;
   isActive?: boolean;
   positionType?: string;
+  prompt?: string;
 }
 
 interface AssetUpdateInput {
@@ -29,6 +30,7 @@ interface AssetUpdateInput {
   sortOrder?: number;
   isActive?: boolean;
   positionType?: string;
+  prompt?: string;
 }
 
 // Backgrounds, frames, and props are three separate Prisma models but share
@@ -137,6 +139,8 @@ export class AssetsService {
         return this.prisma.frame;
       case 'props':
         return this.prisma.prop;
+      case 'templates':
+        return this.prisma.template;
     }
   }
 
@@ -165,6 +169,9 @@ export class AssetsService {
     };
     if (kind === 'props' && dto.positionType) {
       data.positionType = dto.positionType;
+    }
+    if (kind === 'templates' && dto.prompt !== undefined) {
+      data.prompt = dto.prompt;
     }
 
     const created = await this.getDelegate(kind).create({ data });
@@ -203,6 +210,7 @@ export class AssetsService {
     if (dto.sortOrder !== undefined) data.sortOrder = dto.sortOrder;
     if (dto.isActive !== undefined) data.isActive = dto.isActive;
     if (kind === 'props' && dto.positionType !== undefined) data.positionType = dto.positionType;
+    if (kind === 'templates' && dto.prompt !== undefined) data.prompt = dto.prompt;
 
     const updated = await this.getDelegate(kind).update({ where: { id }, data });
 
@@ -365,5 +373,30 @@ export class AssetsService {
   }
   reorderProps(campaignId: string, orderedIds: string[], userId: string) {
     return this.reorderAssets('props', campaignId, orderedIds, userId);
+  }
+
+  // ─── TEMPLATES ───
+  // Booth-selectable AI reference images + per-template prompt overrides.
+
+  createTemplate(dto: AssetCreateInput, file: Express.Multer.File, userId: string) {
+    return this.createAsset('templates', dto, file, userId);
+  }
+  findAllTemplates(campaignId: string, includeInactive = false) {
+    return this.findAllByCampaign('templates', campaignId, includeInactive);
+  }
+  findTemplateById(id: string) {
+    return this.findAssetById('templates', id);
+  }
+  updateTemplate(id: string, dto: AssetUpdateInput, userId: string) {
+    return this.updateAsset('templates', id, dto, userId);
+  }
+  updateTemplateImage(id: string, file: Express.Multer.File, userId: string) {
+    return this.updateAssetImage('templates', id, file, userId);
+  }
+  deleteTemplate(id: string, userId: string) {
+    return this.deleteAsset('templates', id, userId);
+  }
+  reorderTemplates(campaignId: string, orderedIds: string[], userId: string) {
+    return this.reorderAssets('templates', campaignId, orderedIds, userId);
   }
 }

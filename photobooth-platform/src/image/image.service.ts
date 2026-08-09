@@ -458,7 +458,9 @@ export class ImageService {
   // A bare http(s) URL is also accepted since brandConfig.logo has no
   // dedicated upload flow and may be set to an external URL directly.
 
-  private async loadAssetImage(imageUrl: string): Promise<Buffer> {
+  // Public: also called directly by ProcessingWorker to load a Template's
+  // reference image ahead of an AI generation call.
+  async loadAssetImage(imageUrl: string): Promise<Buffer> {
     if (/^https?:\/\//i.test(imageUrl)) {
       const res = await fetch(imageUrl);
       if (!res.ok) throw new Error(`Failed to fetch ${imageUrl}: ${res.status}`);

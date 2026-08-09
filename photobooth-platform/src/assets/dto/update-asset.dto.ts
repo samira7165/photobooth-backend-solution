@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsInt, IsBoolean, IsEnum, MinLength } from 'class-validator';
+import { IsString, IsOptional, IsInt, IsBoolean, IsEnum, MinLength, MaxLength } from 'class-validator';
 import { Type, Transform } from 'class-transformer';
 
 // @Type/@Transform below coerce string values into numbers/booleans, since
@@ -20,8 +20,14 @@ export class UpdateAssetDto {
   @IsBoolean()
   isActive?: boolean;
 
-  // Props only — ignored for backgrounds/frames
+  // Props only — ignored for backgrounds/frames/templates
   @IsOptional()
   @IsEnum(['HEAD_TOP', 'FACE_EYES', 'FACE_FULL', 'HEAD_HAIR', 'BODY_NECK', 'HAND_HELD'])
   positionType?: string;
+
+  // Templates only — ignored for backgrounds/frames/props
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  prompt?: string;
 }

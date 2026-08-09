@@ -18,6 +18,7 @@ import { AssetsService } from './assets.service';
 import { CreateBackgroundDto } from './dto/create-background.dto';
 import { CreateFrameDto } from './dto/create-frame.dto';
 import { CreatePropDto } from './dto/create-prop.dto';
+import { CreateTemplateDto } from './dto/create-template.dto';
 import { UpdateAssetDto } from './dto/update-asset.dto';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -162,5 +163,45 @@ export class AssetsController {
   @Delete('props/:id')
   async deleteProp(@Param('id') id: string, @Request() req) {
     return this.assetsService.deleteProp(id, req.user.id);
+  }
+
+  // ─── TEMPLATES ───
+
+  @Post('templates')
+  @UseInterceptors(FileInterceptor('image'))
+  async createTemplate(@Body() dto: CreateTemplateDto, @UploadedFile() file: Express.Multer.File, @Request() req) {
+    if (!file) throw new BadRequestException('image file is required');
+    return this.assetsService.createTemplate(dto, file, req.user.id);
+  }
+
+  @Get('templates/:campaignId')
+  async listTemplates(@Param('campaignId') campaignId: string, @Query('includeInactive') includeInactive?: string) {
+    return this.assetsService.findAllTemplates(campaignId, includeInactive === 'true');
+  }
+
+  @Patch('templates/reorder/:campaignId')
+  async reorderTemplates(
+    @Param('campaignId') campaignId: string,
+    @Body() body: { orderedIds: string[] },
+    @Request() req,
+  ) {
+    return this.assetsService.reorderTemplates(campaignId, body.orderedIds, req.user.id);
+  }
+
+  @Patch('templates/:id/image')
+  @UseInterceptors(FileInterceptor('image'))
+  async replaceTemplateImage(@Param('id') id: string, @UploadedFile() file: Express.Multer.File, @Request() req) {
+    if (!file) throw new BadRequestException('image file is required');
+    return this.assetsService.updateTemplateImage(id, file, req.user.id);
+  }
+
+  @Patch('templates/:id')
+  async updateTemplate(@Param('id') id: string, @Body() dto: UpdateAssetDto, @Request() req) {
+    return this.assetsService.updateTemplate(id, dto, req.user.id);
+  }
+
+  @Delete('templates/:id')
+  async deleteTemplate(@Param('id') id: string, @Request() req) {
+    return this.assetsService.deleteTemplate(id, req.user.id);
   }
 }

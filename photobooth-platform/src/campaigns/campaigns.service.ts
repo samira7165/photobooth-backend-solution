@@ -102,6 +102,7 @@ export class CampaignsService {
         backgrounds: { orderBy: { sortOrder: 'asc' } },
         frames: { orderBy: { sortOrder: 'asc' } },
         props: { orderBy: { sortOrder: 'asc' } },
+        templates: { orderBy: { sortOrder: 'asc' } },
         apiKeyLinks: {
           include: {
             apiKey: {
@@ -238,6 +239,9 @@ export class CampaignsService {
         backgrounds: { where: { isActive: true }, orderBy: { sortOrder: 'asc' }, select: { id: true, name: true, thumbnailUrl: true, imageUrl: true } },
         frames: { where: { isActive: true }, orderBy: { sortOrder: 'asc' }, select: { id: true, name: true, thumbnailUrl: true, imageUrl: true } },
         props: { where: { isActive: true }, orderBy: { sortOrder: 'asc' }, select: { id: true, name: true, thumbnailUrl: true, imageUrl: true, positionType: true } },
+        // No `prompt` here — that's a generation detail for the backend only,
+        // never sent to the public booth endpoint.
+        templates: { where: { isActive: true }, orderBy: { sortOrder: 'asc' }, select: { id: true, name: true, thumbnailUrl: true, imageUrl: true } },
       },
     });
 
@@ -255,6 +259,7 @@ export class CampaignsService {
       backgrounds: campaign.backgrounds,
       frames: campaign.frames,
       props: campaign.props,
+      templates: campaign.templates,
       backgroundConfig: campaign.backgroundConfig,
       frameConfig: campaign.frameConfig,
       propConfig: campaign.propConfig,

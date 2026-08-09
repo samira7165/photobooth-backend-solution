@@ -5,15 +5,16 @@ import api from '@/lib/api';
 import Modal from './Modal';
 import { resolveImageUrl } from '@/lib/utils';
 
-const ASSET_TYPES = [
+export const ASSET_TYPES = [
   { kind: 'backgrounds', label: 'Backgrounds' },
   { kind: 'frames', label: 'Frames' },
   { kind: 'props', label: 'Props' },
+  { kind: 'templates', label: 'AI Templates' },
 ];
 
 const POSITION_TYPES = ['HEAD_TOP', 'FACE_EYES', 'FACE_FULL', 'HEAD_HAIR', 'BODY_NECK', 'HAND_HELD'];
 
-function AssetGrid({ kind, campaignId, canManage }) {
+export function AssetGrid({ kind, campaignId, canManage }) {
   const [assets, setAssets] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -24,6 +25,7 @@ function AssetGrid({ kind, campaignId, canManage }) {
   const [name, setName] = useState('');
   const [file, setFile] = useState(null);
   const [positionType, setPositionType] = useState('HEAD_TOP');
+  const [prompt, setPrompt] = useState('');
 
   const load = async () => {
     setLoading(true);
@@ -47,6 +49,7 @@ function AssetGrid({ kind, campaignId, canManage }) {
     setName('');
     setFile(null);
     setPositionType('HEAD_TOP');
+    setPrompt('');
   };
 
   const handleUpload = async (e) => {
@@ -61,6 +64,7 @@ function AssetGrid({ kind, campaignId, canManage }) {
       formData.append('campaignId', campaignId);
       formData.append('image', file);
       if (kind === 'props') formData.append('positionType', positionType);
+      if (kind === 'templates' && prompt) formData.append('prompt', prompt);
 
       await api.post(`/assets/${kind}`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
@@ -135,6 +139,11 @@ function AssetGrid({ kind, campaignId, canManage }) {
                 <div className="text-[10px] text-gray-500">
                   order: {asset.sortOrder} {!asset.isActive && '· inactive'}
                 </div>
+                {kind === 'templates' && (
+                  <div className="text-[10px] text-gray-500 truncate mt-0.5" title={asset.prompt || ''}>
+                    {asset.prompt ? asset.prompt : <span className="italic">uses campaign default prompt</span>}
+                  </div>
+                )}
               </div>
               {canManage && (
                 <button
@@ -184,6 +193,21 @@ function AssetGrid({ kind, campaignId, canManage }) {
                   </option>
                 ))}
               </select>
+            </div>
+          )}
+
+          {kind === 'templates' && (
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1.5">
+                Prompt <span className="text-gray-500 font-normal">(optional)</span>
+              </label>
+              <textarea
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                rows={3}
+                placeholder="e.g. Turn this person into Spider-Man in the classic red-and-blue suit, web-slinging pose. Leave blank to use the campaign's default AI prompt for this template too."
+                className="w-full bg-[#0a0a0a] border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#2563eb]"
+              />
             </div>
           )}
 

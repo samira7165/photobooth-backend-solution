@@ -50,11 +50,19 @@ export class QueueMonitorService {
   // BullMQ jobs only carry { submissionId } in job.data — campaign/mode come
   // from the Submission row, batch-fetched once per list rather than N+1.
 
-  private async enrichJobs(jobs: Array<{ id?: string; data: { submissionId: string }; timestamp: number; progress: unknown; processedOn?: number; failedReason?: string; attemptsMade?: number }>) {
+  private async enrichJobs(jobs: Array<{ id?: string; data: { submissionId: string }; timestamp: number; progress: unknown; processedOn?: number; finishedOn?: number; failedReason?: string; attemptsMade?: number }>) {
     const submissionIds = jobs.map((j) => j.data.submissionId);
     const submissions = await this.prisma.submission.findMany({
       where: { id: { in: submissionIds } },
-      select: { id: true, mode: true, userName: true, campaign: { select: { name: true, slug: true } } },
+      select: {
+        id: true,
+        mode: true,
+        userName: true,
+        originalUrl: true,
+        resultUrl: true,
+        thumbnailUrl: true,
+        campaign: { select: { name: true, slug: true } },
+      },
     });
     const byId = new Map(submissions.map((s) => [s.id, s]));
 
@@ -70,8 +78,14 @@ export class QueueMonitorService {
         progress: typeof job.progress === 'number' ? job.progress : 0,
         queuedAt: new Date(job.timestamp).toISOString(),
         startedAt: job.processedOn ? new Date(job.processedOn).toISOString() : null,
+        finishedAt: job.finishedOn ? new Date(job.finishedOn).toISOString() : null,
         failedReason: job.failedReason,
         attemptsMade: job.attemptsMade,
+        // Original is always available once uploaded; result only exists
+        // once processing actually finished successfully.
+        originalUrl: sub?.originalUrl || null,
+        resultUrl: sub?.resultUrl || null,
+        thumbnailUrl: sub?.thumbnailUrl || null,
       };
     });
   }
@@ -88,6 +102,14 @@ export class QueueMonitorService {
 
   async getFailedJobs() {
     const jobs = await this.queue.getFailed();
+    return this.enrichJobs(jobs);
+  }
+
+  // Most-recent-first, capped — BullMQ's own removeOnComplete:{count:100}
+  // (see addJob() below) already bounds how many completed jobs exist at
+  // all, this just bounds how many the UI asks for in one page.
+  async getCompletedJobs(limit = 20) {
+    const jobs = await this.queue.getCompleted(0, limit - 1);
     return this.enrichJobs(jobs);
   }
 
