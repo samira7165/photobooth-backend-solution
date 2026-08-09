@@ -9,7 +9,7 @@ import Modal from '@/components/Modal';
 import AssetsTab from '@/components/AssetsTab';
 import SubmissionsTab from '@/components/SubmissionsTab';
 import useCurrentUser from '@/lib/useCurrentUser';
-import { hasRole, CAMPAIGN_STATUS_TRANSITIONS, formatDate } from '@/lib/utils';
+import { hasRole, CAMPAIGN_STATUS_TRANSITIONS, formatDate, COLLECT_FIELD_OPTIONS } from '@/lib/utils';
 import AiModelConfigSection, { flattenProviderKeys, keyLabel } from '@/components/AiModelConfigSection';
 import { EnabledAssetGrid } from '@/components/StagedAssetSection';
 
@@ -333,6 +333,7 @@ function EditCampaignModal({ open, onClose, campaign, onSaved }) {
         outputHeight: campaign.photoSettings?.outputHeight || 1920,
         outputMode: campaign.outputMode,
         backgroundRemoval: campaign.backgroundConfig?.removal || false,
+        collectFields: campaign.collectFields || [],
       });
 
       const chain = (campaign.aiConfig?.keyChain || []).filter(Boolean);
@@ -350,6 +351,15 @@ function EditCampaignModal({ open, onClose, campaign, onSaved }) {
   if (!form) return null;
 
   const aiModeSelected = form.processingMode === 'ai' || form.processingMode === 'both';
+
+  const toggleCollectField = (field) => {
+    setForm((f) => ({
+      ...f,
+      collectFields: f.collectFields.includes(field)
+        ? f.collectFields.filter((x) => x !== field)
+        : [...f.collectFields, field],
+    }));
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -396,6 +406,7 @@ function EditCampaignModal({ open, onClose, campaign, onSaved }) {
           outputHeight: Number(form.outputHeight),
         },
         outputMode: form.outputMode,
+        collectFields: form.collectFields,
         backgroundConfig: {
           ...campaign.backgroundConfig,
           enabled: backgroundsEnabled,
@@ -555,6 +566,26 @@ function EditCampaignModal({ open, onClose, campaign, onSaved }) {
               className="w-full bg-[#0a0a0a] border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#2563eb]"
             />
           </div>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-300 mb-1.5">Collect Fields</label>
+          <div className="flex gap-4">
+            {COLLECT_FIELD_OPTIONS.map((field) => (
+              <label key={field} className="flex items-center gap-2 text-sm text-gray-300">
+                <input
+                  type="checkbox"
+                  checked={form.collectFields.includes(field)}
+                  onChange={() => toggleCollectField(field)}
+                  className="rounded border-white/20 bg-[#0a0a0a] text-[#2563eb] focus:ring-[#2563eb]"
+                />
+                {field}
+              </label>
+            ))}
+          </div>
+          <p className="text-xs text-gray-500 mt-1.5">
+            Leave all unchecked and the booth won&apos;t ask for any info before submitting.
+          </p>
         </div>
 
         <div>

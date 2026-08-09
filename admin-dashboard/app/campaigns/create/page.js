@@ -6,6 +6,7 @@ import api from '@/lib/api';
 import DashboardLayout from '@/components/DashboardLayout';
 import AiModelConfigSection, { flattenProviderKeys } from '@/components/AiModelConfigSection';
 import { StagedAssetSection, uploadStagedItems } from '@/components/StagedAssetSection';
+import { COLLECT_FIELD_OPTIONS } from '@/lib/utils';
 
 function slugify(value) {
   return value
@@ -15,8 +16,6 @@ function slugify(value) {
     .replace(/\s+/g, '-')
     .replace(/-+/g, '-');
 }
-
-const COLLECT_FIELD_OPTIONS = ['name', 'phone', 'email'];
 
 export default function CreateCampaignPage() {
   const router = useRouter();

@@ -13,6 +13,8 @@ export function resolveImageUrl(url) {
   return `${API_ORIGIN}/uploads/${url}`;
 }
 
+export const COLLECT_FIELD_OPTIONS = ['name', 'phone', 'email'];
+
 export function formatDate(value) {
   if (!value) return '—';
   const d = new Date(value);
