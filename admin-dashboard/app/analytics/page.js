@@ -96,13 +96,13 @@ export default function AnalyticsPage() {
     setExporting(true);
     try {
       const res = await api.get('/analytics/export', {
-        params: campaignId ? { campaignId } : {},
+        params: { ...(campaignId ? { campaignId } : {}), groupBy },
         responseType: 'blob',
       });
       const url = URL.createObjectURL(new Blob([res.data]));
       const link = document.createElement('a');
       link.href = url;
-      link.download = campaignId ? `photobooth-${campaignId}.xlsx` : 'photobooth-all.xlsx';
+      link.download = `photobooth-${campaignId || 'all'}-${groupBy}.xlsx`;
       document.body.appendChild(link);
       link.click();
       link.remove();

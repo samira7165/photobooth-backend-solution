@@ -267,7 +267,9 @@ export class SubmissionsService {
       response.processingTime = submission.processingTime;
 
       if (submission.downloadCode) {
-        const baseUrl = this.config.get<string>('FRONTEND_URL') || 'http://localhost:3001';
+        // See the matching comment in DeliveryService.generateQRCode — ADMIN_URL
+        // is the app that actually serves /dl/[code]; FRONTEND_URL isn't.
+        const baseUrl = this.config.get<string>('ADMIN_URL') || 'http://localhost:3002';
         response.downloadUrl = `${baseUrl}/dl/${submission.downloadCode}`;
         response.downloadCode = submission.downloadCode;
       }

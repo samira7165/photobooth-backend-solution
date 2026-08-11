@@ -6,6 +6,9 @@ import { json, urlencoded } from 'express';
 import { AppModule } from './app.module';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
+import cors, { CorsOptionsDelegate } from 'cors';
+import { DeveloperKeysService } from './developer-keys/developer-keys.service';
+import { CorsService } from './common/services/cors.service';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
@@ -55,17 +58,108 @@ async function bootstrap() {
     }),
   );
 
-  // CORS — allow frontend URLs
-  app.enableCors({
-    origin: [
-      'http://localhost:3001',
-      'http://localhost:3002',
-      process.env.FRONTEND_URL,
-      process.env.ADMIN_URL,
-    ].filter(Boolean),
-    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'],
-    credentials: true,
-  });
+  // CORS — dynamic origin check for the admin dashboard/booth frontends
+  // (cookie-based JWT, so credentials: true), but /api/v1/public/* (external
+  // developer keys, no cookies involved) needs its own origin check based on
+  // per-campaign/per-key `allowedOrigins` from the database instead of this
+  // one. A single delegate branches on path so both policies run through
+  // one middleware instead of two conflicting `cors()` instances.
+  //
+  // Note this can only check the request Origin against the union of every
+  // known public-api origin, not one specific key's list — browsers never
+  // send the actual x-api-key value on a CORS preflight (OPTIONS) request,
+  // only on the real request that follows. DeveloperApiKeyGuard (which does
+  // see the key on that real request) is what enforces the exact per-key
+  // allowedOrigins; see DeveloperKeysService.checkOrigin/getAllKnownOrigins.
+  const developerKeysService = app.get(DeveloperKeysService);
+  const corsService = app.get(CorsService);
+
+  // Known ahead of time, regardless of environment — booth/admin frontends
+  // that always run on the same fixed host. ALLOWED_ORIGINS covers ones that
+  // vary per deployment (e.g. a client's own booth domain) without a code
+  // change; per-campaign allowedOrigins (via CorsService) covers ones that
+  // aren't known until a campaign is created.
+  const staticAdminOrigins = [
+    'http://localhost:3001',
+    'http://localhost:3002',
+    'http://localhost:3003',
+    process.env.FRONTEND_URL,
+    process.env.ADMIN_URL,
+  ].filter(Boolean);
+  const envAllowedOrigins = (process.env.ALLOWED_ORIGINS || '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean);
+  const isDev = process.env.NODE_ENV === 'development';
+
+  const checkAdminOrigin = async (origin: string | undefined): Promise<boolean> => {
+    // No Origin header = server-to-server (curl, Postman, a mobile app) —
+    // not something a browser enforces CORS against, so nothing to check.
+    if (!origin) return true;
+    // Dev convenience: any localhost port is trusted, so booth frontends
+    // spun up on a new port don't need a code change + restart to be seen.
+    if (isDev && origin.startsWith('http://localhost:')) return true;
+    if (staticAdminOrigins.includes(origin)) return true;
+    if (envAllowedOrigins.includes(origin)) return true;
+    return corsService.isAllowedOrigin(origin);
+  };
+
+  const corsOptionsDelegate: CorsOptionsDelegate<any> = async (req, callback) => {
+    const isPublicApi = req.path?.startsWith('/api/v1/public');
+
+    if (!isPublicApi) {
+      try {
+        const allowed = await checkAdminOrigin(req.header('Origin'));
+        callback(null, {
+          origin: allowed,
+          methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'],
+          credentials: true,
+        });
+      } catch (err) {
+        // Same fail-closed reasoning as the public-api branch below — this
+        // runs as raw Express middleware, outside Nest's exception filters.
+        console.error('CORS origin check failed for admin/booth request:', err);
+        callback(null, {
+          origin: false,
+          methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'],
+          credentials: true,
+        });
+      }
+      return;
+    }
+
+    // This runs as raw Express middleware, outside Nest's request pipeline —
+    // none of the app's exception filters apply here, so an uncaught error
+    // (e.g. a bad Prisma query) doesn't turn into a clean 500, it crashes
+    // the entire process. Fail closed (deny the origin) and log instead.
+    try {
+      const requestOrigin = req.header('Origin');
+      // No Origin header = server-to-server (curl, a backend proxy) — not
+      // something a browser enforces CORS against, so nothing to check.
+      let originAllowed = true;
+      if (requestOrigin) {
+        const knownOrigins = await developerKeysService.getAllKnownOrigins();
+        originAllowed = knownOrigins.includes(requestOrigin);
+      }
+
+      callback(null, {
+        origin: originAllowed,
+        methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'],
+        allowedHeaders: ['Content-Type', 'x-api-key'],
+        credentials: false, // auth is a header (x-api-key), not a cookie
+      });
+    } catch (err) {
+      console.error('CORS origin check failed for /api/v1/public/* request:', err);
+      callback(null, {
+        origin: false,
+        methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'],
+        allowedHeaders: ['Content-Type', 'x-api-key'],
+        credentials: false,
+      });
+    }
+  };
+
+  app.use(cors(corsOptionsDelegate));
 
   // Global rate limiting
   app.use(

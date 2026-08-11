@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ScheduleModule } from '@nestjs/schedule';
 import { BullModule } from '@nestjs/bullmq';
 import { AppConfigModule } from './config/config.module';
 import { PrismaModule } from './prisma/prisma.module';
@@ -19,7 +20,10 @@ import { DeliveryModule } from './delivery/delivery.module';
 import { QueueMonitorModule } from './queue/queue.module';
 import { ProcessingModule } from './processing/processing.module';
 import { AnalyticsModule } from './analytics/analytics.module';
+import { DeveloperKeysModule } from './developer-keys/developer-keys.module';
+import { PublicApiModule } from './public-api/public-api.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
+import { CommonModule } from './common/common.module';
 
 @Module({
   imports: [
@@ -28,6 +32,7 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
     RedisModule,      // redis connection — globally available
     StorageModule,    // S3 client — globally available (falls back to local disk in dev)
     WebsocketModule,  // Socket.IO gateway — globally available
+    CommonModule,     // CorsService (per-campaign origin checks) — globally available
     // BullMQ's Redis connection, resolved the same way RedisService (src/redis/redis.service.ts)
     // already does — same host/port/password source, so it connects the same way that's
     // already proven to work against the docker-compose Redis in this environment.
@@ -45,6 +50,7 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
     // per-route @Throttle() limits. Independent of the coarse express-rate-limit
     // middleware in main.ts, which stays as a blanket first line of defense.
     ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]),
+    ScheduleModule.forRoot(), // enables @Cron() — DeveloperKeysService.resetDailyUsage()
     AuthModule,
     UsersModule,
     CampaignsModule,
@@ -56,6 +62,8 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
     QueueMonitorModule,
     ProcessingModule,
     AnalyticsModule,
+    DeveloperKeysModule,
+    PublicApiModule,
   ],
   // Multiple APP_GUARD providers all run on every request (Nest applies them
   // in registration order, AND'd together — every guard must pass). JwtAuthGuard

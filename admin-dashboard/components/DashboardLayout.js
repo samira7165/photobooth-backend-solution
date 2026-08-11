@@ -23,7 +23,20 @@ export default function DashboardLayout({ title, children }) {
     api
       .get('/auth/profile')
       .then((res) => setUser(res.data))
-      .catch(() => router.replace('/login'))
+      .catch((err) => {
+        // Only force a logout on a genuine, unrecoverable auth failure. The
+        // axios interceptor (lib/api.js) already tried a silent token
+        // refresh before this ever reaches us — if we still get a 401
+        // here, refresh itself failed and cookies were already cleared
+        // there. Anything else (network blip, 5xx, timeout — e.g. the
+        // backend restarting) means the session is still fine; bouncing to
+        // /login here without clearing cookies just makes /login's own
+        // "already logged in" check immediately navigate back, which looks
+        // like the page flashing black and returning.
+        if (err.response?.status === 401) {
+          router.replace('/login');
+        }
+      })
       .finally(() => setLoading(false));
   }, [router]);
 

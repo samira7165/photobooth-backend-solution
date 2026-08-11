@@ -241,7 +241,7 @@ export class AnalyticsService {
 
   // ─── EXCEL EXPORT ───
 
-  async exportToExcel(campaignId?: string): Promise<Buffer> {
+  async exportToExcel(campaignId?: string, groupBy?: string): Promise<Buffer> {
     // exceljs is CJS; a dynamic import() in this CJS-compiled project puts its
     // exports under .default (confirmed: only "default"/"module.exports" show
     // up on the bare namespace) — the module itself, not ExcelJS.Workbook, is
@@ -355,7 +355,31 @@ export class AnalyticsService {
     summarySheet.addRow({ metric: 'Today Failed', value: stats.today.failed });
     summarySheet.addRow({ metric: 'Active Campaigns', value: stats.activeCampaigns });
 
-    // ─── Sheet 3: Per Campaign Stats ───
+    // ─── Sheet 3: Timeline (grouped by hour/day/month, matching the dashboard's toggle) ───
+    const timelineSheetIndex = 2; // 0-based: Submissions, Summary, Timeline, Campaign Stats
+    const timelineSheet = workbook.addWorksheet(`Timeline (${groupBy || 'day'})`);
+
+    timelineSheet.columns = [
+      { header: `Period (${groupBy || 'day'})`, key: 'period', width: 20 },
+      { header: 'Total', key: 'total', width: 10 },
+      { header: 'Completed', key: 'completed', width: 12 },
+      { header: 'Failed', key: 'failed', width: 10 },
+      { header: 'Avg Processing Time (ms)', key: 'avgProcessingTime', width: 22 },
+    ];
+
+    timelineSheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    timelineSheet.getRow(1).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF1A5276' },
+    };
+
+    const timeline = await this.getTimeline({ campaignId, groupBy });
+    for (const t of timeline) {
+      timelineSheet.addRow(t);
+    }
+
+    // ─── Sheet 4: Per Campaign Stats ───
     const campaignSheet = workbook.addWorksheet('Campaign Stats');
 
     campaignSheet.columns = [
@@ -391,6 +415,19 @@ export class AnalyticsService {
         downloads: cs.totalDownloads,
       });
     }
+
+    // Submissions/Summary/Campaign Stats look identical no matter which
+    // groupBy was requested — only the Timeline sheet actually changes.
+    // Opening the file on Submissions by default (Excel's own behavior)
+    // made the by-hour/by-day/by-month selection look like it did nothing.
+    // Forcing the Timeline tab active on open makes the grouping visible
+    // immediately instead of requiring the user to find the right tab.
+    workbook.views = [{
+      x: 0, y: 0, width: 10000, height: 20000,
+      firstSheet: timelineSheetIndex,
+      activeTab: timelineSheetIndex,
+      visibility: 'visible',
+    }];
 
     // Generate buffer
     const buffer = await workbook.xlsx.writeBuffer();

@@ -62,6 +62,11 @@ model Campaign {
   collectFields   Json            @default("[\"name\", \"phone\"]") // which user info fields to collect
   outputMode      String          @default("qr") // "qr", "download", "print", "sms", "email"
 
+  // Origins allowed to call this campaign's /api/v1/public/* endpoints when
+  // a DeveloperApiKey doesn't set its own allowedOrigins — a per-campaign
+  // fallback so most keys on one campaign don't need to repeat the same list.
+  allowedOrigins  Json?           // string[] of origins, e.g. ["https://acme.com"]
+
   // Schedule & Limits
   startDate       DateTime?
   endDate         DateTime?
@@ -79,6 +84,7 @@ model Campaign {
   props           Prop[]
   templates       Template[]
   apiKeyLinks     CampaignApiKey[]
+  developerApiKeys DeveloperApiKey[]
 
   @@index([slug])
   @@index([status])
@@ -336,6 +342,45 @@ model CampaignApiKey {
 
   @@unique([campaignId, apiKeyId])
   @@map("campaign_api_keys")
+}
+
+// ─── DEVELOPER API KEYS ───
+// External-developer access to a campaign's public booth endpoints
+// (/api/v1/public/*) — unrelated to the ApiKey model above, which stores AI
+// provider secrets (Gemini/OpenAI). Do not confuse the two.
+
+model DeveloperApiKey {
+  id              String    @id @default(uuid())
+  campaignId      String
+  name            String    // human label, e.g. "Acme Corp Production Key"
+
+  // The raw key ("pb_live_..."/"pb_test_...") is shown to the admin exactly
+  // once at creation and never stored. keyPrefix (enough of the raw key to
+  // find candidate rows without a full-table scan) is kept in plaintext for
+  // admin-UI display and lookup; keyHash (bcrypt) is what's actually
+  // verified against on every request.
+  keyPrefix       String
+  keyHash         String    @db.Text
+
+  isActive        Boolean   @default(true)
+  // string[] of allowed origins for this specific key; falls back to
+  // campaign.allowedOrigins when null.
+  allowedOrigins  Json?
+  rateLimit       Int       @default(60) // requests per minute
+
+  usageToday      Int       @default(0)
+  usageTotal      Int       @default(0)
+  lastUsedAt      DateTime?
+  expiresAt       DateTime?
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  campaign        Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId])
+  @@index([keyPrefix])
+  @@map("developer_api_keys")
 }
 
 // ─── AUDIT LOG ───

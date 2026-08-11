@@ -18,16 +18,6 @@ export class CreateCampaignDto {
 
   @IsOptional()
   @IsObject()
-  brandConfig?: {
-    logo?: string;
-    primaryColor?: string;
-    secondaryColor?: string;
-    backgroundColor?: string;
-    fontFamily?: string;
-  };
-
-  @IsOptional()
-  @IsObject()
   aiConfig?: {
     provider?: string;
     model?: string;

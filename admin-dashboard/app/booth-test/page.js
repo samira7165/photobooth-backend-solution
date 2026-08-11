@@ -23,6 +23,7 @@ export default function BoothTestPage() {
   const [photoPreviewUrl, setPhotoPreviewUrl] = useState(null);
   const [cameraError, setCameraError] = useState('');
   const [cameraActive, setCameraActive] = useState(false);
+  const [cameraDiagnostics, setCameraDiagnostics] = useState(null);
 
   const [backgroundId, setBackgroundId] = useState('');
   const [frameId, setFrameId] = useState('');
@@ -75,21 +76,28 @@ export default function BoothTestPage() {
 
   const startCamera = useCallback(async () => {
     setCameraError('');
+    setCameraDiagnostics(null);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'user', width: { ideal: 1080 }, height: { ideal: 1920 } },
       });
       streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-      }
+      // "ideal" (not "exact") above lets Chrome negotiate down to whatever
+      // the physical sensor actually supports instead of failing outright —
+      // but that means the real resolution can differ a lot from what was
+      // requested, so log it to make that visible rather than assumed.
+      console.log('Camera negotiated settings:', stream.getVideoTracks()[0]?.getSettings());
+      // Don't touch videoRef.current here — the <video> element only
+      // exists once cameraActive is true (see the JSX below), and that
+      // state update hasn't been committed yet at this point in the
+      // closure, so the ref would still be null. The effect below attaches
+      // the stream once the element has actually mounted.
       setCameraActive(true);
     } catch (err) {
       setCameraError(
         err.name === 'NotAllowedError'
           ? 'Camera permission denied. Allow camera access, or upload a file instead below.'
-          : 'Could not access a camera. Upload a file instead below.',
+          : `Could not access a camera (${err.name}: ${err.message}). Upload a file instead below.`,
       );
     }
   }, []);
@@ -98,14 +106,66 @@ export default function BoothTestPage() {
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
     setCameraActive(false);
+    setCameraDiagnostics(null);
   }, []);
 
   useEffect(() => stopCamera, [stopCamera]);
+
+  // Attaches streamRef.current to the <video> element once it's mounted
+  // (cameraActive true) and reports diagnostics off the loadedmetadata
+  // event rather than a blind timeout — videoWidth/videoHeight are
+  // guaranteed 0 until the browser has actually decoded a frame, so reading
+  // them any earlier is a false-positive source regardless of how long you
+  // wait.
+  useEffect(() => {
+    const stream = streamRef.current;
+    const video = videoRef.current;
+    if (!cameraActive || !stream || !video) return;
+
+    video.srcObject = stream;
+
+    let cancelled = false;
+    const track = stream.getVideoTracks()[0];
+
+    const reportDiagnostics = () => {
+      if (cancelled) return;
+      setCameraDiagnostics({
+        deviceLabel: track?.label || '(no label — permission may not be fully granted)',
+        trackReadyState: track?.readyState,
+        trackMuted: track?.muted,
+        videoWidth: video.videoWidth || 0,
+        videoHeight: video.videoHeight || 0,
+        gotFrames: video.videoWidth > 0 && video.videoHeight > 0,
+      });
+    };
+
+    video.addEventListener('loadedmetadata', reportDiagnostics);
+    // Fallback in case loadedmetadata never fires at all (a genuinely
+    // stalled stream, as opposed to this mount-order bug) — still reports
+    // the all-zero diagnostics instead of leaving the box silently blank.
+    const fallbackTimer = setTimeout(reportDiagnostics, 4000);
+
+    video.play().catch((err) => {
+      console.error('video.play() rejected:', err);
+      if (!cancelled) setCameraError(`Could not start video playback (${err.name}: ${err.message}).`);
+    });
+
+    return () => {
+      cancelled = true;
+      video.removeEventListener('loadedmetadata', reportDiagnostics);
+      clearTimeout(fallbackTimer);
+    };
+  }, [cameraActive]);
 
   const capturePhoto = () => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas) return;
+
+    if (!video.videoWidth || !video.videoHeight) {
+      setCameraError('No video frames available yet — the camera stream has no picture to capture. See the diagnostics above.');
+      return;
+    }
 
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
@@ -159,14 +219,15 @@ export default function BoothTestPage() {
 
   // Steps are numbered dynamically since which optional sections appear
   // (background/frame/prop/template pickers, required-info fields) depends
-  // on this campaign's config.
+  // on this campaign's config. Order: campaign -> required info (name/id) ->
+  // template style -> photo capture -> background/frame/prop -> submit.
   let stepCounter = 1; // "Choose a campaign" is always step 1
+  const fieldsStep = collectFields.length > 0 ? ++stepCounter : null;
+  const templateStep = showTemplatePicker ? ++stepCounter : null;
   const photoStep = ++stepCounter;
   const backgroundStep = showBackgroundPicker ? ++stepCounter : null;
   const frameStep = showFramePicker ? ++stepCounter : null;
   const propStep = showPropPicker ? ++stepCounter : null;
-  const templateStep = showTemplatePicker ? ++stepCounter : null;
-  const fieldsStep = collectFields.length > 0 ? ++stepCounter : null;
   const submitStep = ++stepCounter;
 
   const togglePropId = (id) => {
@@ -292,6 +353,50 @@ export default function BoothTestPage() {
 
         {boothConfig && (
           <>
+            {/* Fields */}
+            {collectFields.length > 0 && (
+              <Section step={fieldsStep} title="Fill required info">
+                <div className="space-y-3">
+                  {collectFields.includes('name') && (
+                    <Field label="Name" value={formFields.userName} onChange={(v) => setFormFields((f) => ({ ...f, userName: v }))} />
+                  )}
+                  {collectFields.includes('phone') && (
+                    <Field label="Phone" value={formFields.userPhone} onChange={(v) => setFormFields((f) => ({ ...f, userPhone: v }))} />
+                  )}
+                  {collectFields.includes('email') && (
+                    <Field label="Email" value={formFields.userEmail} onChange={(v) => setFormFields((f) => ({ ...f, userEmail: v }))} />
+                  )}
+                </div>
+              </Section>
+            )}
+
+            {showTemplatePicker && (
+              <Section step={templateStep} title="Choose a style (which one do you want?)">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  {boothConfig.templates.map((tpl) => (
+                    <button
+                      type="button"
+                      key={tpl.id}
+                      onClick={() => setTemplateId(tpl.id === templateId ? '' : tpl.id)}
+                      className={`rounded-lg border-2 overflow-hidden text-left ${
+                        templateId === tpl.id ? 'border-[#2563eb]' : 'border-white/10 hover:border-white/30'
+                      }`}
+                    >
+                      <div className="aspect-square bg-[#0a0a0a]">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={resolveImageUrl(tpl.thumbnailUrl || tpl.imageUrl)}
+                          alt={tpl.name}
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+                      <div className="px-2 py-1.5 text-xs text-white truncate">{tpl.name}</div>
+                    </button>
+                  ))}
+                </div>
+              </Section>
+            )}
+
             {/* Photo */}
             <Section step={photoStep} title="Take or upload a photo">
               {!photoPreviewUrl ? (
@@ -300,6 +405,7 @@ export default function BoothTestPage() {
                     <div className="space-y-3">
                       <video
                         ref={videoRef}
+                        autoPlay
                         muted
                         playsInline
                         className="w-full max-w-sm rounded-lg bg-black mx-auto"
@@ -318,6 +424,20 @@ export default function BoothTestPage() {
                           Cancel
                         </button>
                       </div>
+                      {cameraDiagnostics && !cameraDiagnostics.gotFrames && (
+                        <div className="max-w-sm mx-auto bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2 text-xs text-amber-300 space-y-1">
+                          <p className="font-medium">
+                            Stream connected but no video frames are arriving — this is a Windows/browser
+                            permission issue, not an app bug. Check Settings → Privacy &amp; security → Camera →
+                            &quot;Let desktop apps access your camera&quot; is On, and close any other app
+                            (Zoom/Teams/OBS) that might be holding the camera.
+                          </p>
+                          <p className="text-amber-400/70 font-mono">
+                            device: {cameraDiagnostics.deviceLabel} · track: {cameraDiagnostics.trackReadyState}
+                            {cameraDiagnostics.trackMuted ? ' (muted)' : ''} · frame: {cameraDiagnostics.videoWidth}x{cameraDiagnostics.videoHeight}
+                          </p>
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <div className="flex flex-col sm:flex-row gap-3">
@@ -453,50 +573,6 @@ export default function BoothTestPage() {
                       )}
                     </button>
                   ))}
-                </div>
-              </Section>
-            )}
-
-            {showTemplatePicker && (
-              <Section step={templateStep} title="Choose a style (which one do you want?)">
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                  {boothConfig.templates.map((tpl) => (
-                    <button
-                      type="button"
-                      key={tpl.id}
-                      onClick={() => setTemplateId(tpl.id === templateId ? '' : tpl.id)}
-                      className={`rounded-lg border-2 overflow-hidden text-left ${
-                        templateId === tpl.id ? 'border-[#2563eb]' : 'border-white/10 hover:border-white/30'
-                      }`}
-                    >
-                      <div className="aspect-square bg-[#0a0a0a]">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={resolveImageUrl(tpl.thumbnailUrl || tpl.imageUrl)}
-                          alt={tpl.name}
-                          className="w-full h-full object-cover"
-                        />
-                      </div>
-                      <div className="px-2 py-1.5 text-xs text-white truncate">{tpl.name}</div>
-                    </button>
-                  ))}
-                </div>
-              </Section>
-            )}
-
-            {/* Fields */}
-            {collectFields.length > 0 && (
-              <Section step={fieldsStep} title="Fill required info">
-                <div className="space-y-3">
-                  {collectFields.includes('name') && (
-                    <Field label="Name" value={formFields.userName} onChange={(v) => setFormFields((f) => ({ ...f, userName: v }))} />
-                  )}
-                  {collectFields.includes('phone') && (
-                    <Field label="Phone" value={formFields.userPhone} onChange={(v) => setFormFields((f) => ({ ...f, userPhone: v }))} />
-                  )}
-                  {collectFields.includes('email') && (
-                    <Field label="Email" value={formFields.userEmail} onChange={(v) => setFormFields((f) => ({ ...f, userEmail: v }))} />
-                  )}
                 </div>
               </Section>
             )}

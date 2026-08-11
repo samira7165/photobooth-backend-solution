@@ -30,9 +30,6 @@ export default function CreateCampaignPage() {
     orientation: 'portrait',
     outputWidth: 1080,
     outputHeight: 1920,
-    primaryColor: '#2563eb',
-    secondaryColor: '#1e40af',
-    backgroundColor: '#ffffff',
     collectFields: ['name', 'phone'],
     outputMode: 'qr',
     backgroundRemoval: false,
@@ -51,6 +48,12 @@ export default function CreateCampaignPage() {
   const [propsItems, setPropsItems] = useState([]);
   const [templatesEnabled, setTemplatesEnabled] = useState(false);
   const [templatesItems, setTemplatesItems] = useState([]);
+
+  // Set once the campaign is actually created — the integrationConfig it
+  // carries contains a plaintext API key shown only this one time (see
+  // CampaignsService.create), so instead of navigating away immediately,
+  // the form is replaced with a "download this now" screen first.
+  const [createdCampaign, setCreatedCampaign] = useState(null);
 
   useEffect(() => {
     api
@@ -109,11 +112,6 @@ export default function CreateCampaignPage() {
           outputWidth: Number(form.outputWidth),
           outputHeight: Number(form.outputHeight),
         },
-        brandConfig: {
-          primaryColor: form.primaryColor,
-          secondaryColor: form.secondaryColor,
-          backgroundColor: form.backgroundColor,
-        },
         backgroundConfig: {
           enabled: backgroundsEnabled,
           removal: form.backgroundRemoval,
@@ -127,14 +125,25 @@ export default function CreateCampaignPage() {
       });
 
       const campaignId = res.data.id;
+      const integrationConfig = res.data.integrationConfig;
 
       // Staged assets couldn't be uploaded until just now — they need a real
       // campaign ID, which didn't exist until the POST above succeeded.
+      //
+      // Deliberately NOT gated on backgroundsEnabled/etc. here — those only
+      // control whether the config's "enabled" flag is on (i.e. whether the
+      // booth shows the picker), not whether staged items get saved. Files
+      // can only be staged while the checkbox is checked (see
+      // StagedAssetSection), but if it's unchecked again before Submit —
+      // even just to collapse the panel — the items are still sitting in
+      // state and the admin's intent was clearly "save what I added."
+      // Gating the upload on the checkbox's final state would silently
+      // discard already-staged files with no warning.
       await Promise.allSettled([
-        backgroundsEnabled && backgroundsItems.length > 0 && uploadStagedItems('backgrounds', campaignId, backgroundsItems),
-        framesEnabled && framesItems.length > 0 && uploadStagedItems('frames', campaignId, framesItems),
-        propsEnabled && propsItems.length > 0 && uploadStagedItems('props', campaignId, propsItems),
-        templatesEnabled && templatesItems.length > 0 && uploadStagedItems('templates', campaignId, templatesItems),
+        backgroundsItems.length > 0 && uploadStagedItems('backgrounds', campaignId, backgroundsItems),
+        framesItems.length > 0 && uploadStagedItems('frames', campaignId, framesItems),
+        propsItems.length > 0 && uploadStagedItems('props', campaignId, propsItems),
+        templatesItems.length > 0 && uploadStagedItems('templates', campaignId, templatesItems),
       ]);
 
       // chain entries are ApiKeyModel ids (one key can appear more than once
@@ -152,13 +161,69 @@ export default function CreateCampaignPage() {
         }
       }
 
-      router.push(`/campaigns/${campaignId}`);
+      if (integrationConfig) {
+        // Plaintext apiKey only ever exists in this one response — show the
+        // download screen instead of navigating straight past it.
+        setCreatedCampaign({ id: campaignId, integrationConfig });
+        setSaving(false);
+      } else {
+        router.push(`/campaigns/${campaignId}`);
+      }
     } catch (err) {
       const msg = err.response?.data?.message;
       setError(Array.isArray(msg) ? msg.join(', ') : msg || 'Failed to create campaign');
       setSaving(false);
     }
   };
+
+  const handleDownloadConfig = () => {
+    if (!createdCampaign) return;
+    const blob = new Blob([JSON.stringify(createdCampaign.integrationConfig, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${createdCampaign.integrationConfig.campaignSlug}-integration-config.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  if (createdCampaign) {
+    const cfg = createdCampaign.integrationConfig;
+    return (
+      <DashboardLayout title="Campaign Created">
+        <div className="max-w-2xl space-y-6">
+          <div className="bg-green-500/10 border border-green-500/30 text-green-400 text-sm rounded-lg px-4 py-3">
+            &quot;{cfg.campaignName}&quot; was created successfully.
+          </div>
+
+          <div className="bg-[#111111] border border-white/10 rounded-xl p-5 space-y-3">
+            <h3 className="text-sm font-semibold text-white uppercase tracking-wide">Integration Config</h3>
+            <p className="text-sm text-gray-400">
+              This file has everything an external developer needs to build a frontend for this campaign —
+              including an API key. <span className="text-amber-400">It&apos;s shown only this once</span>{' '}
+              and cannot be recovered later; if you don&apos;t download it now, you&apos;ll need to generate
+              a new key instead.
+            </p>
+            <button
+              onClick={handleDownloadConfig}
+              className="w-full bg-[#2563eb] hover:bg-blue-700 text-white text-sm font-medium rounded-lg px-4 py-2.5 transition-colors"
+            >
+              Download Integration Config (.json)
+            </button>
+          </div>
+
+          <button
+            onClick={() => router.push(`/campaigns/${createdCampaign.id}`)}
+            className="w-full border border-white/10 hover:bg-white/5 text-gray-300 text-sm rounded-lg px-4 py-2.5 transition-colors"
+          >
+            Continue to Campaign →
+          </button>
+        </div>
+      </DashboardLayout>
+    );
+  }
 
   return (
     <DashboardLayout title="Create Campaign">
@@ -201,7 +266,6 @@ export default function CreateCampaignPage() {
             >
               <option value="non-ai">non-ai</option>
               <option value="ai">ai</option>
-              <option value="both">both</option>
             </select>
           </Field>
         </Section>
@@ -222,11 +286,18 @@ export default function CreateCampaignPage() {
           <Field label="Orientation">
             <select
               value={form.orientation}
-              onChange={(e) => setForm((f) => ({ ...f, orientation: e.target.value }))}
+              onChange={(e) => {
+                const orientation = e.target.value;
+                // Auto-fill the standard size for the chosen orientation —
+                // still just a starting point, Output Width/Height below
+                // stay freely editable for a custom size afterward.
+                const [outputWidth, outputHeight] = orientation === 'landscape' ? [1920, 1080] : [1080, 1920];
+                setForm((f) => ({ ...f, orientation, outputWidth, outputHeight }));
+              }}
               className={inputClass}
             >
-              <option value="portrait">Portrait</option>
-              <option value="landscape">Landscape</option>
+              <option value="portrait">Portrait (1080 × 1920)</option>
+              <option value="landscape">Landscape (1920 × 1080, 16:9)</option>
             </select>
           </Field>
           <div className="grid grid-cols-2 gap-4">
@@ -310,26 +381,6 @@ export default function CreateCampaignPage() {
           </Section>
         )}
 
-        <Section title="Brand Config">
-          <div className="grid grid-cols-3 gap-4">
-            <ColorField
-              label="Primary"
-              value={form.primaryColor}
-              onChange={(v) => setForm((f) => ({ ...f, primaryColor: v }))}
-            />
-            <ColorField
-              label="Secondary"
-              value={form.secondaryColor}
-              onChange={(v) => setForm((f) => ({ ...f, secondaryColor: v }))}
-            />
-            <ColorField
-              label="Background"
-              value={form.backgroundColor}
-              onChange={(v) => setForm((f) => ({ ...f, backgroundColor: v }))}
-            />
-          </div>
-        </Section>
-
         <Section title="Submission">
           <Field label="Collect Fields">
             <div className="flex gap-4">
@@ -402,19 +453,3 @@ function Field({ label, hint, children }) {
   );
 }
 
-function ColorField({ label, value, onChange }) {
-  return (
-    <div>
-      <label className="block text-sm font-medium text-gray-300 mb-1.5">{label}</label>
-      <div className="flex items-center gap-2 bg-[#0a0a0a] border border-white/10 rounded-lg px-2 py-1.5">
-        <input
-          type="color"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          className="w-7 h-7 cursor-pointer"
-        />
-        <span className="text-xs text-gray-400 font-mono">{value}</span>
-      </div>
-    </div>
-  );
-}

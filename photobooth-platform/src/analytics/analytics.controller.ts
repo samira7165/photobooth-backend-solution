@@ -36,12 +36,16 @@ export class AnalyticsController {
 
   @Get('export')
   @Roles('ADMIN')
-  async exportExcel(@Query('campaignId') campaignId: string | undefined, @Res() res: Response) {
-    const buffer = await this.analyticsService.exportToExcel(campaignId);
+  async exportExcel(
+    @Query('campaignId') campaignId: string | undefined,
+    @Query('groupBy') groupBy: string | undefined,
+    @Res() res: Response,
+  ) {
+    const buffer = await this.analyticsService.exportToExcel(campaignId, groupBy);
 
-    const filename = campaignId
-      ? `photobooth-${campaignId}-${Date.now()}.xlsx`
-      : `photobooth-all-${Date.now()}.xlsx`;
+    const campaignPart = campaignId ? campaignId : 'all';
+    const groupByPart = groupBy || 'day';
+    const filename = `photobooth-${campaignPart}-${groupByPart}-${Date.now()}.xlsx`;
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);

@@ -47,14 +47,16 @@ export class ProcessingService {
     imageBuffer: Buffer,
     aiConfig: AiGenerationConfig,
     referenceImageBuffer?: Buffer,
+    outputWidth?: number,
+    outputHeight?: number,
   ): Promise<AiGenerationResult> {
     const prompt = aiConfig?.prompt || DEFAULT_PROMPT;
     const keyChain = aiConfig?.keyChain || [];
 
     if (keyChain.length > 0) {
-      return this.generateWithKeyChain(keyChain, imageBuffer, prompt, aiConfig?.model, referenceImageBuffer);
+      return this.generateWithKeyChain(keyChain, imageBuffer, prompt, aiConfig?.model, referenceImageBuffer, outputWidth, outputHeight);
     }
-    return this.generateWithProviderPriority(campaignId, imageBuffer, prompt, aiConfig, referenceImageBuffer);
+    return this.generateWithProviderPriority(campaignId, imageBuffer, prompt, aiConfig, referenceImageBuffer, outputWidth, outputHeight);
   }
 
   // keyChain entries are ApiKeyModel ids, not ApiKey ids — one physical key
@@ -66,6 +68,8 @@ export class ProcessingService {
     prompt: string,
     fallbackModel?: string,
     referenceImageBuffer?: Buffer,
+    outputWidth?: number,
+    outputHeight?: number,
   ): Promise<AiGenerationResult> {
     const errors: string[] = [];
 
@@ -114,6 +118,8 @@ export class ProcessingService {
           apiKey: decrypt(keyRecord.encryptedKey),
           model,
           referenceImageBuffer,
+          outputWidth,
+          outputHeight,
         });
         const responseTime = Date.now() - startedAt;
         await this.aiProvidersService.recordKeyUsage(keyRecord.id, true, responseTime);
@@ -146,6 +152,8 @@ export class ProcessingService {
     prompt: string,
     aiConfig?: AiGenerationConfig,
     referenceImageBuffer?: Buffer,
+    outputWidth?: number,
+    outputHeight?: number,
   ): Promise<AiGenerationResult> {
     const selected = await this.aiProvidersService.getKeyWithFailover(campaignId, aiConfig?.fallbackProviders);
 
@@ -163,6 +171,8 @@ export class ProcessingService {
         apiKey: selected.key,
         model: aiConfig?.model,
         referenceImageBuffer,
+        outputWidth,
+        outputHeight,
       });
       const responseTime = Date.now() - startedAt;
       await this.aiProvidersService.recordKeyUsage(selected.keyId, true, responseTime);

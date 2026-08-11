@@ -20,6 +20,7 @@ export function AssetGrid({ kind, campaignId, canManage }) {
   const [error, setError] = useState('');
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState('');
   const [preview, setPreview] = useState(null);
 
   const [name, setName] = useState('');
@@ -50,13 +51,23 @@ export function AssetGrid({ kind, campaignId, canManage }) {
     setFile(null);
     setPositionType('HEAD_TOP');
     setPrompt('');
+    setUploadError('');
   };
 
   const handleUpload = async (e) => {
     e.preventDefault();
-    if (!file) return;
+    // No longer inside a real <form> (see the div-vs-form comment below), so
+    // the browser's native `required` validation (red outline + "Please
+    // fill out this field" tooltip) no longer fires on its own — without an
+    // explicit error message here, a missing Name/Image made the button
+    // silently do nothing with zero visual feedback, which just looked
+    // broken.
+    if (!file || !name.trim()) {
+      setUploadError(!file && !name.trim() ? 'Enter a name and choose an image.' : !name.trim() ? 'Enter a name.' : 'Choose an image.');
+      return;
+    }
     setUploading(true);
-    setError('');
+    setUploadError('');
 
     try {
       const formData = new FormData();
@@ -74,7 +85,7 @@ export function AssetGrid({ kind, campaignId, canManage }) {
       load();
     } catch (err) {
       const msg = err.response?.data?.message;
-      setError(Array.isArray(msg) ? msg.join(', ') : msg || 'Upload failed');
+      setUploadError(Array.isArray(msg) ? msg.join(', ') : msg || 'Upload failed');
     } finally {
       setUploading(false);
     }
@@ -98,7 +109,10 @@ export function AssetGrid({ kind, campaignId, canManage }) {
         </h3>
         {canManage && (
           <button
-            onClick={() => setUploadOpen(true)}
+            onClick={() => {
+              setUploadError('');
+              setUploadOpen(true);
+            }}
             className="text-sm bg-[#2563eb] hover:bg-blue-700 text-white rounded-lg px-3 py-1.5 transition-colors"
           >
             + Upload
@@ -167,7 +181,13 @@ export function AssetGrid({ kind, campaignId, canManage }) {
         }}
         title={`Upload ${ASSET_TYPES.find((t) => t.kind === kind)?.label.slice(0, -1)}`}
       >
-        <form onSubmit={handleUpload} className="space-y-4">
+        {/* A real <form> here would nest inside the campaign edit form's own
+            <form> when this AssetGrid is embedded via EnabledAssetGrid (see
+            StagedAssetSection.js) — Modal isn't a portal, so it stays in the
+            same DOM tree as whatever rendered it. HTML doesn't allow nested
+            forms, so this is a plain div with the button driving submit
+            directly instead. */}
+        <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-1.5">Name</label>
             <input
@@ -222,14 +242,17 @@ export function AssetGrid({ kind, campaignId, canManage }) {
             />
           </div>
 
+          {uploadError && <div className="text-red-400 text-sm">{uploadError}</div>}
+
           <button
-            type="submit"
+            type="button"
+            onClick={handleUpload}
             disabled={uploading}
             className="w-full bg-[#2563eb] hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg px-4 py-2.5 transition-colors"
           >
             {uploading ? 'Uploading…' : 'Upload'}
           </button>
-        </form>
+        </div>
       </Modal>
 
       <Modal open={!!preview} onClose={() => setPreview(null)} title={preview?.name || ''} maxWidth="max-w-2xl">

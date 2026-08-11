@@ -34,10 +34,10 @@ export async function uploadStagedItems(kind, campaignId, items) {
 }
 
 // Create-campaign flow: no campaign ID exists yet, so uploads can't actually
-// happen — items are held in browser memory (staged) and only sent via
+// happen items are held in browser memory (staged) and only sent via
 // uploadStagedItems() once the campaign is created. Checking the box reveals
 // this uploader; unchecking it just hides it (staged items are kept, in case
-// it was an accidental click — they're only discarded on unmount/submit).
+// it was an accidental click they're only discarded on unmount/submit).
 export function StagedAssetSection({ kind, enabled, onEnabledChange, items, onItemsChange }) {
   const [name, setName] = useState('');
   const [file, setFile] = useState(null);
@@ -142,6 +142,15 @@ export function StagedAssetSection({ kind, enabled, onEnabledChange, items, onIt
             >
               + Add {label.replace(/s$/, '')}
             </button>
+            {(!name.trim() || !file) && (
+              <p className="text-[11px] text-gray-500">
+                {!name.trim() && !file
+                  ? 'Enter a name and choose a file to enable Add.'
+                  : !name.trim()
+                    ? 'Enter a name to enable Add.'
+                    : 'Choose a file to enable Add.'}
+              </p>
+            )}
           </div>
         </div>
       )}

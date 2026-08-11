@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
+import { BackgroundRemoverService } from './background-remover.service';
 import sharp from 'sharp';
 import * as path from 'path';
 import * as fs from 'fs/promises';
@@ -12,6 +13,7 @@ export class ImageService {
   constructor(
     private prisma: PrismaService,
     private storage: StorageService,
+    private backgroundRemoverService: BackgroundRemoverService,
   ) {}
 
   // ─── FULL POST-PROCESSING PIPELINE ───
@@ -29,7 +31,6 @@ export class ImageService {
       orientation?: string;
       outputWidth?: number;
       outputHeight?: number;
-      brandConfig?: any;
       textConfig?: any;
       qrConfig?: any;
     },
@@ -61,16 +62,6 @@ export class ImageService {
         this.logger.debug('Step 3: Props placement complete');
       } catch (err: any) {
         this.logger.warn(`Props placement failed: ${err.message}`);
-      }
-    }
-
-    // Step 4: Apply logo/watermark (from brand config)
-    if (options.brandConfig?.logo) {
-      try {
-        currentImage = await this.applyLogo(currentImage, options.brandConfig.logo, width, height);
-        this.logger.debug('Step 4: Logo stamp complete');
-      } catch (err: any) {
-        this.logger.warn(`Logo stamp failed: ${err.message}`);
       }
     }
 
@@ -109,7 +100,6 @@ export class ImageService {
       orientation?: string;
       outputWidth?: number;
       outputHeight?: number;
-      brandConfig?: any;
       backgroundConfig?: any;
       textConfig?: any;
     },
@@ -120,16 +110,14 @@ export class ImageService {
 
     this.logger.log(`Non-AI processing submission ${options.submissionId}`);
 
-    // Step 1: Remove background (if enabled)
+    // Step 1: Remove background (if enabled for this campaign). No try/catch
+    // needed here — BackgroundRemoverService.removeBackground() never
+    // throws; it falls back to the original photo itself on any failure and
+    // logs its own warning either way.
     let personBuffer = userPhotoBuffer;
     if (options.backgroundConfig?.removal) {
-      try {
-        personBuffer = await this.removeBackground(userPhotoBuffer);
-        this.logger.debug('Step 1: Background removal complete');
-      } catch (err: any) {
-        this.logger.warn(`Background removal failed, using original: ${err.message}`);
-        personBuffer = userPhotoBuffer;
-      }
+      personBuffer = await this.backgroundRemoverService.removeBackground(userPhotoBuffer);
+      this.logger.debug('Step 1: Background removal complete');
     }
 
     // Step 2: Place on background
@@ -150,40 +138,6 @@ export class ImageService {
     return this.postProcess(currentImage, options);
   }
 
-  // ─── BACKGROUND REMOVAL ───
-
-  async removeBackground(imageBuffer: Buffer): Promise<Buffer> {
-    // Method 1: Use Sharp to remove white/solid backgrounds
-    // This is a simple approach — for production, use rembg or a dedicated API
-
-    // Simple approach: make white/near-white pixels transparent
-    // For better results, integrate with rembg Python library or remove.bg API
-    const { data, info } = await sharp(imageBuffer)
-      .ensureAlpha()
-      .raw()
-      .toBuffer({ resolveWithObject: true });
-
-    const pixels = new Uint8Array(data);
-    const threshold = 240; // near-white threshold
-
-    for (let i = 0; i < pixels.length; i += 4) {
-      const r = pixels[i];
-      const g = pixels[i + 1];
-      const b = pixels[i + 2];
-
-      // If pixel is near-white, make transparent
-      if (r > threshold && g > threshold && b > threshold) {
-        pixels[i + 3] = 0; // set alpha to 0
-      }
-    }
-
-    return sharp(Buffer.from(pixels), {
-      raw: { width: info.width, height: info.height, channels: 4 },
-    })
-      .png()
-      .toBuffer();
-  }
-
   // ─── COMPOSITE PERSON ON BACKGROUND ───
 
   async compositeOnBackground(
@@ -198,31 +152,83 @@ export class ImageService {
 
     const bgBuffer = await this.loadAssetImage(background.imageUrl);
 
-    // Resize background to target dimensions
+    // Resize background to target dimensions — this one SHOULD fill the
+    // entire canvas edge-to-edge, so 'cover' (crop to fill) is correct here,
+    // unlike the person layer below.
     const resizedBg = await sharp(bgBuffer)
       .resize(targetWidth, targetHeight, { fit: 'cover' })
       .toBuffer();
 
-    // Resize person to fit on background (80% of height, centered)
-    const personHeight = Math.round(targetHeight * 0.8);
-    const resizedPerson = await sharp(personBuffer)
-      .resize({ height: personHeight, fit: 'inside', withoutEnlargement: true })
-      .toBuffer();
+    // No face/body detection here — instead of guessing a fixed 80%, size
+    // relative to orientation and let 'inside' fit it without ever
+    // cropping. Unlike 'contain', 'inside' doesn't pad out to a fixed box —
+    // the result is exactly the cutout's own (possibly non-alpha-padded)
+    // size, so left/top have to be computed explicitly below instead of
+    // relying on contain's automatic centering.
+    //
+    // Deliberately using the TARGET CANVAS's orientation here, not the
+    // cutout's own raw pixel dimensions — most webcam/phone captures come
+    // back landscape-framed (e.g. 1080x720) even for a perfectly normal
+    // upright headshot, so a cutout-dimensions check misclassifies that
+    // extremely common case as "landscape person" and undersizes them
+    // (confirmed live: a normal portrait headshot shot on a landscape
+    // webcam came out tiny, sized to 80% of canvas *width* instead of 85%
+    // of canvas *height*). The output canvas's own orientation (portrait
+    // 1080x1920 vs. landscape 1920x1080) is fixed per campaign regardless
+    // of how the capture device framed the shot, so it's the reliable
+    // signal for which sizing rule actually applies.
+    const isLandscapeCanvas = targetWidth > targetHeight;
 
-    const personMeta = await sharp(resizedPerson).metadata();
-    const personWidth = personMeta.width || 0;
+    // withoutEnlargement deliberately omitted (defaults to false, allowing
+    // upscale) — a typical webcam capture (e.g. 1080x720) is lower-res than
+    // a full portrait output canvas (1080x1920), so hitting 85%/80% of the
+    // canvas requires enlarging the cutout. withoutEnlargement:true was
+    // tried first and confirmed live to silently cap the resize at the
+    // source's original size, leaving the person a small ~37% of canvas
+    // height instead of the intended 85% — a much worse defect than the
+    // mild softness of a ~2x upscale.
+    //
+    // Both dimensions of the target box are passed (not just the one being
+    // "aimed for") — passing only a height with width left unbounded lets
+    // 'inside' scale width past the canvas's own width to preserve aspect
+    // ratio, which sharp's compositing then hard-rejects ("Image to
+    // composite must have same dimensions or smaller"), confirmed live.
+    // Giving 'inside' the full box (targetWidth x personHeight, or
+    // personWidth x targetHeight) makes it stop at whichever dimension is
+    // actually the binding constraint, so the result can never exceed the
+    // canvas on either axis.
+    let resizedPerson: Buffer;
+    if (isLandscapeCanvas) {
+      const personWidth = Math.round(targetWidth * 0.8);
+      resizedPerson = await sharp(personBuffer)
+        .resize(personWidth, targetHeight, { fit: 'inside' })
+        .toBuffer();
+    } else {
+      const personHeight = Math.round(targetHeight * 0.85);
+      resizedPerson = await sharp(personBuffer)
+        .resize(targetWidth, personHeight, { fit: 'inside' })
+        .toBuffer();
+    }
 
-    // Center the person on the background
+    const finalPersonMeta = await sharp(resizedPerson).metadata();
+    const personWidth = finalPersonMeta.width || 0;
+    const personHeight = finalPersonMeta.height || 0;
+
+    // Center both horizontally and vertically. Bottom-aligning looked right
+    // for a full-body photo, but for a headshot/bust-crop photo — which
+    // can't reach the target height without exceeding canvas width (see the
+    // no-crop comment above) — it left a small person stranded near the
+    // bottom of a mostly-empty canvas. Centering is the one placement that
+    // looks correct regardless of how large the resized person ends up.
     const left = Math.round((targetWidth - personWidth) / 2);
-    const top = Math.round(targetHeight - personHeight - (targetHeight * 0.05)); // 5% from bottom
+    const top = Math.round((targetHeight - personHeight) / 2);
 
-    // Composite
     return sharp(resizedBg)
       .composite([
         {
           input: resizedPerson,
           left: Math.max(0, left),
-          top: Math.max(0, top),
+          top,
         },
       ])
       .png()
@@ -341,42 +347,6 @@ export class ImageService {
     }
   }
 
-  // ─── LOGO / WATERMARK STAMP ───
-
-  async applyLogo(
-    imageBuffer: Buffer,
-    logoUrl: string,
-    targetWidth: number,
-    targetHeight: number,
-  ): Promise<Buffer> {
-    const logoBuffer = await this.loadAssetImage(logoUrl);
-
-    // Resize logo to 15% of image width, bottom-right corner with 3% padding
-    const logoWidth = Math.round(targetWidth * 0.15);
-    const resizedLogo = await sharp(logoBuffer)
-      .resize(logoWidth, null, { fit: 'inside' })
-      .png()
-      .toBuffer();
-
-    const logoMeta = await sharp(resizedLogo).metadata();
-    const logoHeight = logoMeta.height || 0;
-
-    const padding = Math.round(targetWidth * 0.03);
-    const left = Math.max(0, targetWidth - logoWidth - padding);
-    const top = Math.max(0, targetHeight - logoHeight - padding);
-
-    return sharp(imageBuffer)
-      .composite([
-        {
-          input: resizedLogo,
-          left,
-          top,
-        },
-      ])
-      .png()
-      .toBuffer();
-  }
-
   // ─── TEXT OVERLAY ───
 
   async applyText(
@@ -434,10 +404,20 @@ export class ImageService {
   }
 
   // ─── RESIZE ───
-
+  // Used for the FINAL output composition only — 'contain' fits the whole
+  // image inside the target dimensions and pads any leftover space, so
+  // nothing gets cut off. This matters most for AI-generated images, which
+  // often come back 1:1 or landscape and were previously getting their
+  // sides cropped off when forced into a portrait canvas via 'cover'.
+  // Backgrounds (compositeOnBackground) are a different case — those SHOULD
+  // fill the entire canvas edge-to-edge, so that resize keeps 'cover'.
   async resize(imageBuffer: Buffer, width: number, height: number): Promise<Buffer> {
     return sharp(imageBuffer)
-      .resize(width, height, { fit: 'cover', position: 'centre' })
+      .resize(width, height, {
+        fit: 'contain',
+        position: 'centre',
+        background: { r: 0, g: 0, b: 0, alpha: 1 },
+      })
       .png()
       .toBuffer();
   }
@@ -452,11 +432,11 @@ export class ImageService {
   }
 
   // ─── ASSET LOADING ───
-  // Backgrounds/frames/props/logos are stored the same way AssetsService saves
+  // Backgrounds/frames/props are stored the same way AssetsService saves
   // them: an S3 key in production, or a "/uploads/..." path in local dev
   // (see AssetsService.saveAssetFiles/deleteAssetFiles for the same routing).
-  // A bare http(s) URL is also accepted since brandConfig.logo has no
-  // dedicated upload flow and may be set to an external URL directly.
+  // A bare http(s) URL is also accepted for assets set directly to an
+  // external URL.
 
   // Public: also called directly by ProcessingWorker to load a Template's
   // reference image ahead of an AI generation call.

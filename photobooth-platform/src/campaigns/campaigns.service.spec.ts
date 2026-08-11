@@ -1,7 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ConfigService } from '@nestjs/config';
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { CampaignsService } from './campaigns.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { DeveloperKeysService } from '../developer-keys/developer-keys.service';
+import { CorsService } from '../common/services/cors.service';
 
 describe('CampaignsService', () => {
   let service: CampaignsService;
@@ -18,13 +21,35 @@ describe('CampaignsService', () => {
     },
   };
 
+  // create() auto-provisions a developer API key for every new campaign
+  // (see CampaignsService.create) — mocked here so create() tests don't
+  // need a real DeveloperKeysService/database.
+  const mockDeveloperKeysService = {
+    generateKey: jest.fn().mockResolvedValue({ key: 'pb_live_mock', keyPrefix: 'pb_live_mock' }),
+  };
+
+  const mockConfigService = {
+    get: jest.fn().mockReturnValue('http://localhost:3000/api/v1/public'),
+  };
+
+  // create()/update() clear CorsService's cache after an allowedOrigins
+  // change — mocked here so tests don't need a real CorsService/database.
+  const mockCorsService = {
+    clearCache: jest.fn(),
+  };
+
   beforeEach(async () => {
     jest.clearAllMocks();
+    mockDeveloperKeysService.generateKey.mockResolvedValue({ key: 'pb_live_mock', keyPrefix: 'pb_live_mock' });
+    mockConfigService.get.mockReturnValue('http://localhost:3000/api/v1/public');
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         CampaignsService,
         { provide: PrismaService, useValue: mockPrisma },
+        { provide: DeveloperKeysService, useValue: mockDeveloperKeysService },
+        { provide: ConfigService, useValue: mockConfigService },
+        { provide: CorsService, useValue: mockCorsService },
       ],
     }).compile();
 
@@ -60,6 +85,34 @@ describe('CampaignsService', () => {
       expect(mockPrisma.auditLog.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({ action: 'campaign.created', userId: 'user1' }),
+        }),
+      );
+    });
+
+    it('auto-provisions a developer API key and returns an integrationConfig with the one-time plaintext key', async () => {
+      mockPrisma.campaign.findUnique.mockResolvedValue(null);
+      mockPrisma.campaign.create.mockResolvedValue({
+        id: 'new-1',
+        name: 'New Campaign',
+        slug: 'new-campaign',
+        processingMode: 'non-ai',
+        collectFields: ['name', 'phone'],
+        outputMode: 'qr',
+      });
+
+      const result = await service.create({ name: 'New Campaign', slug: 'new-campaign' } as any, 'user1');
+
+      expect(mockDeveloperKeysService.generateKey).toHaveBeenCalledWith(
+        'new-1',
+        'Default Integration Key',
+        { mode: 'live' },
+      );
+      expect(result.integrationConfig).toEqual(
+        expect.objectContaining({
+          campaignSlug: 'new-campaign',
+          apiKey: 'pb_live_mock',
+          keyPrefix: 'pb_live_mock',
+          authHeader: 'x-api-key',
         }),
       );
     });

@@ -6,6 +6,7 @@ import * as path from 'path';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { ImageService } from '../image/image.service';
+import { BackgroundRemoverService } from '../image/background-remover.service';
 import { DeliveryService } from '../delivery/delivery.service';
 import { WebsocketGateway } from '../websocket/websocket.gateway';
 import { ProcessingService } from './processing.service';
@@ -26,6 +27,7 @@ export class ProcessingWorker extends WorkerHost {
     private prisma: PrismaService,
     private storage: StorageService,
     private imageService: ImageService,
+    private backgroundRemoverService: BackgroundRemoverService,
     private deliveryService: DeliveryService,
     private websocketGateway: WebsocketGateway,
     private processingService: ProcessingService,
@@ -72,7 +74,6 @@ export class ProcessingWorker extends WorkerHost {
         orientation: submission.orientation || undefined,
         outputWidth: photoSettings.outputWidth,
         outputHeight: photoSettings.outputHeight,
-        brandConfig: campaign.brandConfig,
         backgroundConfig: campaign.backgroundConfig,
         textConfig: campaign.textConfig,
       });
@@ -82,18 +83,16 @@ export class ProcessingWorker extends WorkerHost {
       const aiConfig = (campaign.aiConfig as any) || {};
 
       // If a background swap is configured, apply it to the *original* photo
-      // before generation — not after. removeBackground() is a simple
-      // near-white-pixel keyer (see its own comment), which only works
-      // against the plain backdrop a booth photo is shot on; running it on
-      // an already AI-transformed image (arbitrary generated background, no
-      // clean backdrop to key out) wouldn't work. This way "change the
-      // background" behaves the same — and uses the same code — for both
-      // modes: the swap happens once, upstream of whatever mode-specific
-      // work follows.
+      // before generation — not after. Running background removal on an
+      // already AI-transformed image (arbitrary generated background, no
+      // clean subject/background split left to segment) wouldn't work. This
+      // way "change the background" behaves the same — and uses the same
+      // code — for both modes: the swap happens once, upstream of whatever
+      // mode-specific work follows.
       let generationInput = originalBuffer;
       if (campaign.backgroundConfig && (campaign.backgroundConfig as any).removal && submission.backgroundUsed) {
         try {
-          const isolated = await this.imageService.removeBackground(originalBuffer);
+          const isolated = await this.backgroundRemoverService.removeBackground(originalBuffer);
           generationInput = await this.imageService.compositeOnBackground(
             isolated,
             submission.backgroundUsed,
@@ -130,7 +129,14 @@ export class ProcessingWorker extends WorkerHost {
       }
       const effectiveAiConfig = { ...aiConfig, prompt: template?.prompt || aiConfig.prompt };
 
-      const generation = await this.processingService.generate(campaign.id, generationInput, effectiveAiConfig, referenceImageBuffer);
+      const generation = await this.processingService.generate(
+        campaign.id,
+        generationInput,
+        effectiveAiConfig,
+        referenceImageBuffer,
+        photoSettings.outputWidth || 1080,
+        photoSettings.outputHeight || 1920,
+      );
 
       const postProcessed = await this.imageService.postProcess(generation.resultBuffer, {
         campaignId: campaign.id,
@@ -141,7 +147,6 @@ export class ProcessingWorker extends WorkerHost {
         orientation: submission.orientation || undefined,
         outputWidth: photoSettings.outputWidth,
         outputHeight: photoSettings.outputHeight,
-        brandConfig: campaign.brandConfig,
         textConfig: campaign.textConfig,
         qrConfig: campaign.qrConfig,
       });

@@ -225,7 +225,6 @@ function OverviewTab({ campaign }) {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <ConfigSection title="Photo Settings" config={campaign.photoSettings} />
-        <ConfigSection title="Brand Config" config={campaign.brandConfig} />
         <ConfigSection title="AI Config" config={campaign.aiConfig} />
         <ConfigSection title="QR Config" config={campaign.qrConfig} />
         <ConfigSection title="Background Config" config={campaign.backgroundConfig} />
@@ -461,7 +460,6 @@ function EditCampaignModal({ open, onClose, campaign, onSaved }) {
           >
             <option value="non-ai">non-ai</option>
             <option value="ai">ai</option>
-            <option value="both">both</option>
           </select>
         </div>
 
@@ -537,11 +535,18 @@ function EditCampaignModal({ open, onClose, campaign, onSaved }) {
           <label className="block text-sm font-medium text-gray-300 mb-1.5">Orientation</label>
           <select
             value={form.orientation}
-            onChange={(e) => setForm((f) => ({ ...f, orientation: e.target.value }))}
+            onChange={(e) => {
+              const orientation = e.target.value;
+              // Auto-fill the standard size for the chosen orientation —
+              // still just a starting point, Output Width/Height below
+              // stay freely editable for a custom size afterward.
+              const [outputWidth, outputHeight] = orientation === 'landscape' ? [1920, 1080] : [1080, 1920];
+              setForm((f) => ({ ...f, orientation, outputWidth, outputHeight }));
+            }}
             className="w-full bg-[#0a0a0a] border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#2563eb]"
           >
-            <option value="portrait">Portrait</option>
-            <option value="landscape">Landscape</option>
+            <option value="portrait">Portrait (1080 × 1920)</option>
+            <option value="landscape">Landscape (1920 × 1080, 16:9)</option>
           </select>
         </div>
 

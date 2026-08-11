@@ -25,10 +25,14 @@ export default function LiveActivityFeed() {
   const [unseen, setUnseen] = useState(0);
   const [, setTick] = useState(0);
 
-  const isLoginPage = pathname === '/login';
+  // /dl/[code] is the guest-facing download page (see app/dl/[code]/page.js)
+  // — reachable by anyone who scans a QR code, with no admin session at all.
+  // This widget is an internal admin tool, so it shouldn't render (or open a
+  // socket) on that page or /login, same as it already skipped /login.
+  const isPublicPage = pathname === '/login' || pathname?.startsWith('/dl/');
 
   useEffect(() => {
-    if (isLoginPage) return;
+    if (isPublicPage) return;
     const socket = getSocket();
 
     const pushEvent = (text, timestamp) => {
@@ -52,7 +56,7 @@ export default function LiveActivityFeed() {
       socket.off('admin:new_submission', onNewSubmission);
       socket.off('admin:job_update', onJobUpdate);
     };
-  }, [isLoginPage]);
+  }, [isPublicPage]);
 
   // Re-render once a second so "Ns ago" stays fresh while the panel is open.
   useEffect(() => {
@@ -66,7 +70,7 @@ export default function LiveActivityFeed() {
     if (!open) setUnseen(0);
   };
 
-  if (isLoginPage) return null;
+  if (isPublicPage) return null;
 
   return (
     <div className="fixed bottom-5 right-5 z-50">

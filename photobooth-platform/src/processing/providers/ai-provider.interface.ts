@@ -12,6 +12,13 @@ export interface AiGenerateInput {
   // provider-dependent — see each provider's generate() for how (or
   // whether) it actually uses this.
   referenceImageBuffer?: Buffer;
+  // The campaign's target output dimensions (photoSettings.outputWidth/
+  // Height). Asking for this via prompt text alone is unreliable — models
+  // frequently ignore it — so providers that support a real aspect-ratio
+  // generation parameter (see GeminiProvider) should use it instead.
+  // Support is provider-dependent, same as referenceImageBuffer.
+  outputWidth?: number;
+  outputHeight?: number;
 }
 
 export interface AiProviderResult {

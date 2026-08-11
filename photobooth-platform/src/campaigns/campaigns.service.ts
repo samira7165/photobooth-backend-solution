@@ -1,7 +1,10 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateCampaignDto } from './dto/create-campaign.dto';
 import { UpdateCampaignDto } from './dto/update-campaign.dto';
+import { DeveloperKeysService } from '../developer-keys/developer-keys.service';
+import { CorsService } from '../common/services/cors.service';
 
 // Campaign status follows a one-way state machine (see updateStatus below):
 // DRAFT -> ACTIVE -> PAUSED/COMPLETED -> ARCHIVED. Only updateStatus() is
@@ -9,7 +12,12 @@ import { UpdateCampaignDto } from './dto/update-campaign.dto';
 // the transition rules can't be bypassed by a plain PATCH.
 @Injectable()
 export class CampaignsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private developerKeysService: DeveloperKeysService,
+    private config: ConfigService,
+    private corsService: CorsService,
+  ) {}
 
   async create(dto: CreateCampaignDto, userId: string) {
     // Check slug uniqueness
@@ -28,7 +36,6 @@ export class CampaignsService {
         name: dto.name,
         slug: dto.slug,
         processingMode: dto.processingMode || 'non-ai',
-        brandConfig: dto.brandConfig || {},
         aiConfig: dto.aiConfig || {},
         photoSettings: dto.photoSettings || { orientation: 'portrait', outputWidth: 1080, outputHeight: 1920 },
         backgroundConfig: dto.backgroundConfig || { removal: false, allowCustomUpload: false },
@@ -57,7 +64,51 @@ export class CampaignsService {
       },
     });
 
-    return campaign;
+    // A new campaign can carry its own allowedOrigins — clear CorsService's
+    // cache so main.ts's CORS check sees it on the very next request instead
+    // of waiting out the 5-minute TTL.
+    this.corsService.clearCache();
+
+    // Every new campaign gets a first developer API key automatically, so
+    // there's always something immediately usable to hand an external
+    // developer. This has to happen here, in the same request as creation —
+    // the plaintext key only ever exists in THIS response; it's never
+    // stored or retrievable again after this (see DeveloperKeysService).
+    const key = await this.developerKeysService.generateKey(campaign.id, 'Default Integration Key', { mode: 'live' });
+
+    return {
+      ...campaign,
+      integrationConfig: this.buildIntegrationConfig(campaign, key.key, key.keyPrefix),
+    };
+  }
+
+  private buildIntegrationConfig(
+    campaign: { slug: string; name: string; processingMode: string; collectFields: any; outputMode: string },
+    apiKey: string,
+    keyPrefix: string,
+  ) {
+    const apiBaseUrl = this.config.get<string>('PUBLIC_API_URL') || 'http://localhost:3000/api/v1/public';
+
+    return {
+      campaignSlug: campaign.slug,
+      campaignName: campaign.name,
+      apiBaseUrl,
+      authHeader: 'x-api-key',
+      apiKey,
+      keyPrefix,
+      processingMode: campaign.processingMode,
+      collectFields: campaign.collectFields,
+      outputMode: campaign.outputMode,
+      endpoints: {
+        config: 'GET /config — campaign settings, backgrounds, frames, props, templates',
+        session: 'POST /session — start a booth session (optional, body: { hallId? })',
+        submit: 'POST /submit — multipart upload, field "photo" + form fields (see collectFields)',
+        status: 'GET /status/:submissionId — poll until status is COMPLETED or FAILED',
+        download: 'GET /download/:code — result photo info for a completed submission',
+      },
+      generatedAt: new Date().toISOString(),
+      warning: 'apiKey is shown only once, at campaign creation, and is never stored in recoverable form. If lost, issue a new key via POST /developer-keys — this exact one cannot be recovered.',
+    };
   }
 
   async findAll(filters?: { status?: string }) {
@@ -168,6 +219,10 @@ export class CampaignsService {
       },
     });
 
+    // allowedOrigins may have just changed — clear CorsService's cache so
+    // the new value takes effect immediately instead of waiting out the TTL.
+    this.corsService.clearCache();
+
     return campaign;
   }
 
@@ -231,7 +286,7 @@ export class CampaignsService {
   }
 
   // ─── BOOTH-FACING ENDPOINT (PUBLIC) ───
-  // Returns only what the booth client needs — branding, active props/frames/backgrounds
+  // Returns only what the booth client needs — settings, active props/frames/backgrounds
   async getBoothConfig(slug: string) {
     const campaign = await this.prisma.campaign.findUnique({
       where: { slug },
@@ -252,7 +307,6 @@ export class CampaignsService {
     return {
       name: campaign.name,
       slug: campaign.slug,
-      branding: campaign.brandConfig,
       photoSettings: campaign.photoSettings,
       collectFields: campaign.collectFields,
       outputMode: campaign.outputMode,

@@ -34,7 +34,10 @@ export class DeliveryService {
 
     // Generate a short download code
     const downloadCode = this.generateShortCode();
-    const baseUrl = process.env.FRONTEND_URL || 'http://localhost:3001';
+    // ADMIN_URL (not FRONTEND_URL) is the actual running app — the
+    // admin-dashboard's own /dl/[code] page, which is the guest-facing page
+    // this link/QR code needs to open. FRONTEND_URL has no server behind it.
+    const baseUrl = process.env.ADMIN_URL || 'http://localhost:3002';
     const downloadUrl = `${baseUrl}/dl/${downloadCode}`;
 
     // Determine QR content
@@ -150,7 +153,12 @@ export class DeliveryService {
 
   // ─── DOWNLOAD HANDLING ───
 
-  async getDownloadInfo(downloadCode: string) {
+  // countAsDownload defaults true for the actual image-serving route; the
+  // guest-facing page calls this too (just to render a preview + button),
+  // and without opting out here every page view would inflate downloadCount
+  // before the guest has downloaded anything.
+  async getDownloadInfo(downloadCode: string, options: { countAsDownload?: boolean } = {}) {
+    const countAsDownload = options.countAsDownload !== false;
     const submission = await this.prisma.submission.findFirst({
       where: { downloadCode },
       select: {
@@ -165,7 +173,6 @@ export class DeliveryService {
           select: {
             name: true,
             slug: true,
-            brandConfig: true,
             outputMode: true,
           },
         },
@@ -191,18 +198,18 @@ export class DeliveryService {
       imageUrl = `/uploads/${submission.resultUrl}`;
     }
 
-    // Increment download count
-    await this.prisma.submission.update({
-      where: { id: submission.id },
-      data: { downloadCount: { increment: 1 } },
-    });
+    if (countAsDownload) {
+      await this.prisma.submission.update({
+        where: { id: submission.id },
+        data: { downloadCount: { increment: 1 } },
+      });
+    }
 
     return {
       imageUrl,
       userName: submission.userName,
       campaignName: submission.campaign.name,
-      branding: submission.campaign.brandConfig,
-      downloadCount: submission.downloadCount + 1,
+      downloadCount: countAsDownload ? submission.downloadCount + 1 : submission.downloadCount,
       createdAt: submission.createdAt,
     };
   }

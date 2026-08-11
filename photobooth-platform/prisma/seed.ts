@@ -52,12 +52,6 @@ async function main() {
       name: 'Demo Campaign',
       status: 'DRAFT',
       processingMode: 'non-ai',
-      brandConfig: {
-        logo: null,
-        primaryColor: '#1A5276',
-        secondaryColor: '#2E86C1',
-        backgroundColor: '#FFFFFF',
-      },
       photoSettings: {
         orientation: 'portrait',
         outputWidth: 1080,

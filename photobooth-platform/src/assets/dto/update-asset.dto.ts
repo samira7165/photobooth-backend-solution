@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsInt, IsBoolean, IsEnum, MinLength, MaxLength } from 'class-validator';
+import { IsString, IsOptional, IsInt, IsBoolean, IsEnum, MinLength } from 'class-validator';
 import { Type, Transform } from 'class-transformer';
 
 // @Type/@Transform below coerce string values into numbers/booleans, since
@@ -25,9 +25,9 @@ export class UpdateAssetDto {
   @IsEnum(['HEAD_TOP', 'FACE_EYES', 'FACE_FULL', 'HEAD_HAIR', 'BODY_NECK', 'HAND_HELD'])
   positionType?: string;
 
-  // Templates only — ignored for backgrounds/frames/props
+  // Templates only — ignored for backgrounds/frames/props. No length cap,
+  // same as create-template.dto.ts's prompt field.
   @IsOptional()
   @IsString()
-  @MaxLength(2000)
   prompt?: string;
 }

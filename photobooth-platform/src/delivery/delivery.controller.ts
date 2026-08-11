@@ -14,7 +14,9 @@ export class DeliveryController {
   @Public()
   @Get(':code')
   async download(@Param('code') code: string) {
-    return this.deliveryService.getDownloadInfo(code);
+    // Info-only fetch (the guest-facing page renders a preview + a separate
+    // Download button) — shouldn't count as an actual download by itself.
+    return this.deliveryService.getDownloadInfo(code, { countAsDownload: false });
   }
 
   // Direct image download
@@ -27,9 +29,17 @@ export class DeliveryController {
       // Redirect to presigned S3 URL
       return res.redirect(info.imageUrl);
     } else {
-      // Serve local file
+      // Serve local file. The download page (admin-dashboard, :3002) and
+      // this API (:3000) are different origins, and browsers ignore the
+      // HTML `download` attribute on cross-origin links — without this
+      // header, clicking "Download" just navigates to view the image
+      // instead of saving it. Setting Content-Disposition here forces a
+      // real download regardless of which origin linked to it.
       const filePath = path.join(process.cwd(), info.imageUrl);
-      return res.sendFile(filePath);
+      const ext = path.extname(filePath) || '.png';
+      return res.sendFile(filePath, {
+        headers: { 'Content-Disposition': `attachment; filename="photobooth${ext}"` },
+      });
     }
   }
 }

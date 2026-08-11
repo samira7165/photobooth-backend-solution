@@ -182,6 +182,15 @@ export default function QueueMonitorPage() {
                   <span className="font-mono text-gray-300">{truncateId(job.submissionId)}</span>
                   <span className="text-gray-500">{job.campaignName || '—'}</span>
                   <span className="text-gray-500 text-xs">{timeAgo(job.queuedAt)}</span>
+                  {canControl && (
+                    <button
+                      onClick={() => handleRemove(job.jobId)}
+                      disabled={rowBusy === job.jobId}
+                      className="text-xs text-red-400 hover:underline disabled:opacity-50"
+                    >
+                      Remove
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
@@ -203,12 +212,13 @@ export default function QueueMonitorPage() {
                 <th className="px-5 py-2.5 font-medium">Finished</th>
                 <th className="px-5 py-2.5 font-medium">Original</th>
                 <th className="px-5 py-2.5 font-medium">Result</th>
+                {canControl && <th className="px-5 py-2.5 font-medium">Actions</th>}
               </tr>
             </thead>
             <tbody>
               {completed.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-5 py-8 text-center text-gray-500">No completed jobs yet</td>
+                  <td colSpan={canControl ? 7 : 6} className="px-5 py-8 text-center text-gray-500">No completed jobs yet</td>
                 </tr>
               ) : (
                 completed.map((job) => (
@@ -219,6 +229,17 @@ export default function QueueMonitorPage() {
                     <td className="px-5 py-2.5 text-gray-400">{job.finishedAt ? timeAgo(job.finishedAt) : '—'}</td>
                     <td className="px-5 py-2.5"><DownloadLink url={job.originalUrl} label="Original" /></td>
                     <td className="px-5 py-2.5"><DownloadLink url={job.resultUrl} label="Result" /></td>
+                    {canControl && (
+                      <td className="px-5 py-2.5">
+                        <button
+                          onClick={() => handleRemove(job.jobId)}
+                          disabled={rowBusy === job.jobId}
+                          className="text-xs text-red-400 hover:underline disabled:opacity-50"
+                        >
+                          Remove
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 ))
               )}
