@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { encrypt, decrypt } from '../common/utils/encryption';
 
@@ -10,7 +10,28 @@ import { encrypt, decrypt } from '../common/utils/encryption';
 // it actually needs to make an AI provider call on a campaign's behalf.
 @Injectable()
 export class AiProvidersService {
+  private logger = new Logger(AiProvidersService.name);
+
   constructor(private prisma: PrismaService) {}
+
+  // Human-readable "why" behind a key's eligibility, for the KEY SELECTION
+  // logs below — purely descriptive, computed the same way (and in the same
+  // order) as the real filters in getAvailableKey() so it never disagrees
+  // with the actual selection outcome.
+  private describeKeyStatus(key: {
+    isActive: boolean;
+    provider: { isHealthy: boolean };
+    errorCount: number;
+    usageToday: number;
+    dailyLimit: number | null;
+  }): string {
+    if (!key.isActive) return 'DISABLED';
+    if (!key.provider.isHealthy) return 'PROVIDER UNHEALTHY';
+    if (key.errorCount >= 10) return 'TOO MANY ERRORS';
+    if (key.dailyLimit && key.usageToday >= key.dailyLimit) return 'AT DAILY LIMIT';
+    if (key.errorCount >= 7 || (key.dailyLimit && key.usageToday >= key.dailyLimit * 0.9)) return 'NEAR LIMIT';
+    return 'AVAILABLE';
+  }
 
   // ─── PROVIDERS ───
 
@@ -147,6 +168,20 @@ export class AiProvidersService {
       throw new NotFoundException('Model not found for this key');
     }
 
+    // A campaign's aiConfig.keyChain stores specific ApiKeyModel ids — if one
+    // gets deleted out from under a campaign that's still referencing it,
+    // every submission on that campaign starts failing with an opaque
+    // "not found" error and no visible link back to "a model was removed".
+    // Blocking the removal here, with the actual campaign name(s) named, is
+    // far cheaper than debugging that after the fact.
+    const campaigns = await this.prisma.campaign.findMany({ select: { id: true, name: true, aiConfig: true } });
+    const usedBy = campaigns.filter((c) => ((c.aiConfig as any)?.keyChain || []).includes(modelId));
+    if (usedBy.length > 0) {
+      throw new BadRequestException(
+        `Cannot remove this model — it's in the AI key chain of: ${usedBy.map((c) => c.name).join(', ')}. Update those campaigns' AI config first.`,
+      );
+    }
+
     await this.prisma.apiKeyModel.delete({ where: { id: modelId } });
     return { message: 'Model removed from key' };
   }
@@ -212,6 +247,10 @@ export class AiProvidersService {
   // if nothing qualifies. Returns the key already decrypted — callers should
   // use it immediately and not persist it anywhere.
   async getAvailableKey(campaignId: string, providerName?: string): Promise<{ key: string; keyId: string; providerId: string; providerName: string } | null> {
+    this.logger.log('─── KEY SELECTION START ───');
+    const campaign = await this.prisma.campaign.findUnique({ where: { id: campaignId }, select: { slug: true } });
+    this.logger.log(`Campaign: ${campaign?.slug || 'unknown'} (id: ${campaignId})${providerName ? ` | provider filter: ${providerName}` : ''}`);
+
     // 1. Find keys linked to this campaign (or shared keys with null campaignId)
     const campaignKeys = await this.prisma.campaignApiKey.findMany({
       where: {
@@ -227,9 +266,17 @@ export class AiProvidersService {
       },
     });
 
+    const allKeys = campaignKeys.map(ck => ck.apiKey);
+    this.logger.log(`Found ${allKeys.length} total keys linked to this campaign`);
+    for (const k of allKeys) {
+      const limit = k.dailyLimit ?? '∞';
+      this.logger.debug(
+        `Key "${k.keyIdentifier}" (${k.provider.name}) — active: ${k.isActive}, errors: ${k.errorCount}, usage: ${k.usageToday}/${limit}, status: ${this.describeKeyStatus(k)}`,
+      );
+    }
+
     // 2. Filter to active, healthy, under-limit keys
-    let availableKeys = campaignKeys
-      .map(ck => ck.apiKey)
+    let availableKeys = allKeys
       .filter(k => k.isActive)
       .filter(k => k.provider.isHealthy)
       .filter(k => !k.dailyLimit || k.usageToday < k.dailyLimit)
@@ -246,9 +293,17 @@ export class AiProvidersService {
       return a.usageToday - b.usageToday;
     });
 
-    if (availableKeys.length === 0) return null;
+    this.logger.log(`After filtering: ${availableKeys.length} keys available`);
+
+    if (availableKeys.length === 0) {
+      this.logger.warn(`No available keys for campaign ${campaign?.slug || campaignId}${providerName ? ` (provider: ${providerName})` : ''} — see key statuses above for why each was rejected`);
+      this.logger.log('─── KEY SELECTION END ───');
+      return null;
+    }
 
     const selected = availableKeys[0];
+    this.logger.log(`Selected: "${selected.keyIdentifier}" (provider: ${selected.provider.name}, priority: lowest errors + lowest usage)`);
+    this.logger.log('─── KEY SELECTION END ───');
 
     // 5. Decrypt and return
     const decryptedKey = decrypt(selected.encryptedKey);
@@ -269,8 +324,21 @@ export class AiProvidersService {
   // are a rolling summary; this log is the actual per-call history behind
   // AiProvidersController's GET /ai-providers/activity.
   async recordKeyUsage(keyId: string, success: boolean, responseTime?: number, errorMessage?: string) {
+    this.logger.log('─── KEY USAGE RECORDED ───');
+    // Read-only, purely for the before→after log line below — the actual
+    // update()s further down are unchanged.
+    const before = await this.prisma.apiKey.findUnique({
+      where: { id: keyId },
+      select: { keyIdentifier: true, usageToday: true, usageTotal: true, errorCount: true },
+    });
+    this.logger.log(`Key: "${before?.keyIdentifier || keyId}" | Success: ${success} | Response time: ${responseTime != null ? `${responseTime}ms` : 'n/a'}`);
+    if (!success && errorMessage) {
+      this.logger.warn(`Error: ${errorMessage}`);
+    }
+
+    let after: { usageToday: number; usageTotal: number; errorCount: number };
     if (success) {
-      await this.prisma.apiKey.update({
+      after = await this.prisma.apiKey.update({
         where: { id: keyId },
         data: {
           usageToday: { increment: 1 },
@@ -280,13 +348,19 @@ export class AiProvidersService {
         },
       });
     } else {
-      await this.prisma.apiKey.update({
+      after = await this.prisma.apiKey.update({
         where: { id: keyId },
         data: {
           errorCount: { increment: 1 },
           lastErrorAt: new Date(),
         },
       });
+    }
+
+    if (before) {
+      this.logger.log(
+        `Updated: usageToday ${before.usageToday}→${after.usageToday}, usageTotal ${before.usageTotal}→${after.usageTotal}, errorCount ${before.errorCount}→${after.errorCount}`,
+      );
     }
 
     await this.prisma.apiKeyUsageLog.create({
@@ -344,15 +418,40 @@ export class AiProvidersService {
   async getKeyWithFailover(campaignId: string, providerPriority?: string[]): Promise<{ key: string; keyId: string; providerId: string; providerName: string }> {
     const priority = providerPriority || ['gemini', 'dalle', 'replicate'];
 
+    this.logger.log('─── FAILOVER START ───');
+    this.logger.log(`Priority order: ${priority.join(' -> ')}`);
+
     for (const providerName of priority) {
+      this.logger.log(`Trying provider: ${providerName}...`);
       const result = await this.getAvailableKey(campaignId, providerName);
-      if (result) return result;
+      if (result) {
+        const identifier = await this.keyIdentifierFor(result.keyId);
+        this.logger.log(`${providerName} — found key "${identifier}", returning`);
+        this.logger.log(`─── FAILOVER END (selected: ${identifier}) ───`);
+        return result;
+      }
+      this.logger.warn(`${providerName} — NO available keys`);
     }
 
     // Last resort: try any available key regardless of provider
+    this.logger.log('All priority providers exhausted — falling back to any provider...');
     const anyKey = await this.getAvailableKey(campaignId);
-    if (anyKey) return anyKey;
+    if (anyKey) {
+      const identifier = await this.keyIdentifierFor(anyKey.keyId);
+      this.logger.log(`any provider — found key "${identifier}" (provider: ${anyKey.providerName}), returning`);
+      this.logger.log(`─── FAILOVER END (selected: ${identifier}) ───`);
+      return anyKey;
+    }
 
+    this.logger.warn('─── FAILOVER END (no keys available from any provider) ───');
     throw new BadRequestException('No available API keys for this campaign. All keys are exhausted, disabled, or erroring.');
+  }
+
+  // Log-only helper — getAvailableKey() intentionally doesn't return
+  // keyIdentifier (callers only need the id), so the failover log fetches it
+  // separately rather than widening that method's return shape.
+  private async keyIdentifierFor(keyId: string): Promise<string> {
+    const key = await this.prisma.apiKey.findUnique({ where: { id: keyId }, select: { keyIdentifier: true } });
+    return key?.keyIdentifier || keyId;
   }
 }

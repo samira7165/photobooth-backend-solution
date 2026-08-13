@@ -61,19 +61,34 @@ export class GeminiProvider implements AiProvider {
     const requestParts: any[] = [];
     if (input.referenceImageBuffer) {
       requestParts.push({ inlineData: { mimeType: 'image/jpeg', data: input.referenceImageBuffer.toString('base64') } });
-      this.logger.log(`Sending reference image to Gemini ahead of the booth photo (${input.referenceImageBuffer.length} bytes)`);
+      this.logger.log(`[IMAGE 1/2] Reference/style image attached — ${input.referenceImageBuffer.length} bytes raw, ${Math.ceil(input.referenceImageBuffer.length / 3) * 4} base64 chars`);
     } else {
-      this.logger.log('No reference image for this submission — sending only the booth photo');
+      this.logger.log('[IMAGE 1/2] No reference image for this submission — skipping (booth photo only)');
     }
     requestParts.push({ inlineData: { mimeType: 'image/jpeg', data: input.imageBuffer.toString('base64') } });
+    this.logger.log(`[IMAGE ${input.referenceImageBuffer ? '2/2' : '1/1'}] Booth photo attached — ${input.imageBuffer.length} bytes raw, ${Math.ceil(input.imageBuffer.length / 3) * 4} base64 chars`);
     requestParts.push({ text: input.prompt });
 
-    const body: any = { contents: [{ parts: requestParts }] };
+    const imagePartCount = requestParts.filter((p) => p.inlineData).length;
+    this.logger.log(`Sending request to Gemini: ${imagePartCount} image part(s) + 1 text prompt part (model: ${model})`);
+
+    // Low temperature trades away creative variance for literal instruction-
+    // following — confirmed via live testing that the default temperature
+    // was letting the model regenerate a scene close to the reference image
+    // instead of actually performing a requested face swap on it.
+    const body: any = { contents: [{ parts: requestParts }], generationConfig: { temperature: 0.2 } };
     if (input.outputWidth && input.outputHeight) {
       const aspectRatio = closestAspectRatio(input.outputWidth, input.outputHeight);
-      body.generationConfig = { imageConfig: { aspectRatio } };
+      body.generationConfig.imageConfig = { aspectRatio };
       this.logger.log(`Requesting Gemini aspectRatio ${aspectRatio} for target ${input.outputWidth}x${input.outputHeight}`);
     }
+
+    console.log('\n========== PROMPT SENT TO GEMINI ==========');
+    console.log('Campaign prompt:', input.prompt);
+    console.log('Full text part:', JSON.stringify(body.contents[0].parts.find((p: any) => p.text)?.text || 'NO TEXT FOUND'));
+    console.log('Number of images:', body.contents[0].parts.filter((p: any) => p.inlineData).length);
+    console.log('Model:', model || 'default');
+    console.log('============================================\n');
 
     const res = await fetch(`${API_BASE}/${model}:generateContent`, {
       method: 'POST',
@@ -83,6 +98,8 @@ export class GeminiProvider implements AiProvider {
       },
       body: JSON.stringify(body),
     });
+
+    this.logger.log(`Gemini responded: HTTP ${res.status} in ${Date.now() - startedAt}ms`);
 
     if (!res.ok) {
       const errBody = await res.text().catch(() => res.statusText);

@@ -41,6 +41,15 @@ export class CampaignsController {
     return this.campaignsService.updateStatus(id, body.status, req.user.id);
   }
 
+  // Issues a fresh developer API key and returns the same integrationConfig
+  // shape shown once at creation — the plaintext of a key is never stored,
+  // so this doesn't recover the original, it hands back a new working one.
+  @Post(':id/integration-config')
+  @Roles('ADMIN')
+  async regenerateIntegrationConfig(@Param('id') id: string, @Request() req) {
+    return this.campaignsService.regenerateIntegrationConfig(id, req.user.id);
+  }
+
   // SUPER_ADMIN only — deleting a campaign is destructive and can't target an
   // ACTIVE campaign (see CampaignsService.delete).
   @Delete(':id')

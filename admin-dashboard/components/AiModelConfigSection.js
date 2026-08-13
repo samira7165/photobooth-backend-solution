@@ -34,6 +34,19 @@ export function flattenProviderKeys(providers) {
   return flat;
 }
 
+// A key with zero models contributes nothing to flattenProviderKeys() above
+// (the (key, model) pair is what a chain entry actually needs), so
+// aiKeys.length === 0 alone can't tell "no keys exist" apart from "keys
+// exist but none have a model yet" — very different fixes, and worth
+// telling apart in the empty-state message below.
+export function countAllKeys(providers) {
+  let count = 0;
+  for (const p of providers || []) {
+    count += (p.apiKeys || []).length;
+  }
+  return count;
+}
+
 export default function AiModelConfigSection({
   aiKeys,
   keysLoading,
@@ -42,6 +55,7 @@ export default function AiModelConfigSection({
   prompt,
   onPromptChange,
   required,
+  totalKeysCount = 0,
 }) {
   const primaryKeyId = keyChain[0] || '';
   const fallbackKeyIds = keyChain.slice(1);
@@ -94,7 +108,9 @@ export default function AiModelConfigSection({
         <div className="text-sm text-gray-500">Loading available keys…</div>
       ) : aiKeys.length === 0 ? (
         <div className="text-sm text-amber-400">
-          No API keys configured yet — add one on the AI Providers page first.
+          {totalKeysCount > 0
+            ? `You have ${totalKeysCount} API key${totalKeysCount === 1 ? '' : 's'} configured, but none of them have a model added yet — a campaign can't use a key until it has at least one. Add a model on the AI Providers page (under the key's "Models" section).`
+            : 'No API keys configured yet — add one on the AI Providers page first.'}
         </div>
       ) : (
         <>

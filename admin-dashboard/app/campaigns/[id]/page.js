@@ -10,7 +10,7 @@ import AssetsTab from '@/components/AssetsTab';
 import SubmissionsTab from '@/components/SubmissionsTab';
 import useCurrentUser from '@/lib/useCurrentUser';
 import { hasRole, CAMPAIGN_STATUS_TRANSITIONS, formatDate, COLLECT_FIELD_OPTIONS } from '@/lib/utils';
-import AiModelConfigSection, { flattenProviderKeys, keyLabel } from '@/components/AiModelConfigSection';
+import AiModelConfigSection, { flattenProviderKeys, keyLabel, countAllKeys } from '@/components/AiModelConfigSection';
 import { EnabledAssetGrid } from '@/components/StagedAssetSection';
 
 const TABS = ['Overview', 'Assets', 'Submissions'];
@@ -51,6 +51,7 @@ export default function CampaignDetailPage() {
   const [statusUpdating, setStatusUpdating] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [downloadingConfig, setDownloadingConfig] = useState(false);
 
   const canManage = hasRole(user?.role, 'ADMIN');
   const canDelete = hasRole(user?.role, 'SUPER_ADMIN');
@@ -94,6 +95,33 @@ export default function CampaignDetailPage() {
     } catch (err) {
       alert(err.response?.data?.message || 'Failed to delete campaign');
       setDeleting(false);
+    }
+  };
+
+  // A key's plaintext is never stored, so there's nothing to "re-download"
+  // from the original creation — this issues a brand new developer API key
+  // for the campaign every time it's clicked, packaged the same way. The
+  // old key(s) keep working; this doesn't revoke anything.
+  const handleDownloadIntegrationConfig = async () => {
+    if (!confirm(`Download an API config for "${campaign.name}"? This issues a new API key — any existing keys keep working.`)) return;
+    setDownloadingConfig(true);
+    try {
+      const res = await api.post(`/campaigns/${id}/integration-config`);
+      const cfg = res.data;
+      const blob = new Blob([JSON.stringify(cfg, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${cfg.campaignSlug}-integration-config.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      alert(`Downloaded — a new API key ("${cfg.keyPrefix}...") was issued and saved to the file.`);
+    } catch (err) {
+      alert(err.response?.data?.message || 'Failed to generate integration config');
+    } finally {
+      setDownloadingConfig(false);
     }
   };
 
@@ -145,6 +173,14 @@ export default function CampaignDetailPage() {
               className="text-sm border border-white/10 hover:bg-white/5 text-gray-300 rounded-lg px-3 py-2 transition-colors"
             >
               Edit
+            </button>
+            <button
+              onClick={handleDownloadIntegrationConfig}
+              disabled={downloadingConfig}
+              title="Issues a new API key and downloads a ready-to-use integration config for this campaign"
+              className="text-sm border border-white/10 hover:bg-white/5 disabled:opacity-50 text-gray-300 rounded-lg px-3 py-2 transition-colors"
+            >
+              {downloadingConfig ? 'Generating…' : 'Download API Config'}
             </button>
             {canDelete && (
               <button
@@ -305,6 +341,7 @@ function EditCampaignModal({ open, onClose, campaign, onSaved }) {
 
   const [aiKeys, setAiKeys] = useState([]);
   const [aiKeysLoading, setAiKeysLoading] = useState(true);
+  const [totalKeysCount, setTotalKeysCount] = useState(0);
   const [keyChain, setKeyChain] = useState(['']);
   const [aiPrompt, setAiPrompt] = useState('');
   const [originalChain, setOriginalChain] = useState([]);
@@ -317,7 +354,10 @@ function EditCampaignModal({ open, onClose, campaign, onSaved }) {
   useEffect(() => {
     api
       .get('/ai-providers')
-      .then((res) => setAiKeys(flattenProviderKeys(res.data)))
+      .then((res) => {
+        setAiKeys(flattenProviderKeys(res.data));
+        setTotalKeysCount(countAllKeys(res.data));
+      })
       .catch(() => setAiKeys([]))
       .finally(() => setAiKeysLoading(false));
   }, []);
@@ -422,6 +462,7 @@ function EditCampaignModal({ open, onClose, campaign, onSaved }) {
           },
         }),
       });
+      alert(`Saved — "${form.name}" was updated successfully.`);
       onSaved();
     } catch (err) {
       const msg = err.response?.data?.message;
@@ -472,6 +513,7 @@ function EditCampaignModal({ open, onClose, campaign, onSaved }) {
             prompt={aiPrompt}
             onPromptChange={setAiPrompt}
             required
+            totalKeysCount={totalKeysCount}
           />
         )}
 

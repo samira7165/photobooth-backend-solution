@@ -107,8 +107,36 @@ export class CampaignsService {
         download: 'GET /download/:code — result photo info for a completed submission',
       },
       generatedAt: new Date().toISOString(),
-      warning: 'apiKey is shown only once, at campaign creation, and is never stored in recoverable form. If lost, issue a new key via POST /developer-keys — this exact one cannot be recovered.',
+      warning: 'apiKey is shown only once, right now, and is never stored in recoverable form. If lost, download the integration config again from the campaign page — that issues a fresh key; the previous one keeps working until revoked separately.',
     };
+  }
+
+  // Lets an admin pull a working integration config for a campaign at any
+  // time after creation, not just the one shown once on the create screen —
+  // the plaintext of a DeveloperApiKey is never stored, so "downloading it
+  // again" isn't recovering the original key, it's issuing a new one under
+  // the same campaign and packaging it the same way. Old keys are left
+  // alone (see DeveloperKeysController.revoke to retire one deliberately).
+  async regenerateIntegrationConfig(campaignId: string, userId: string) {
+    const campaign = await this.findById(campaignId);
+
+    const key = await this.developerKeysService.generateKey(
+      campaign.id,
+      `Integration Key (${new Date().toISOString().slice(0, 10)})`,
+      { mode: 'live' },
+    );
+
+    await this.prisma.auditLog.create({
+      data: {
+        userId,
+        action: 'campaign.integration_config_regenerated',
+        entityType: 'campaign',
+        entityId: campaign.id,
+        metadata: { keyPrefix: key.keyPrefix },
+      },
+    });
+
+    return this.buildIntegrationConfig(campaign, key.key, key.keyPrefix);
   }
 
   async findAll(filters?: { status?: string }) {

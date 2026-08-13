@@ -157,6 +157,15 @@ export default function BoothTestPage() {
     };
   }, [cameraActive]);
 
+  // Center-crops to a 9:16 portrait rect matching the live preview's
+  // aspect-[9/16] object-cover box (see the <video> element below), so what
+  // was framed on screen is exactly what gets saved — same math as
+  // object-fit: cover. Most webcams are physically landscape hardware and
+  // getUserMedia's width/height are only "ideal" hints the browser can
+  // ignore, so this crop (not the camera) is what actually makes the photo
+  // portrait.
+  const PORTRAIT_ASPECT = 9 / 16; // width / height
+
   const capturePhoto = () => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -167,9 +176,26 @@ export default function BoothTestPage() {
       return;
     }
 
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    canvas.getContext('2d').drawImage(video, 0, 0);
+    const srcW = video.videoWidth;
+    const srcH = video.videoHeight;
+    const srcAspect = srcW / srcH;
+
+    let cropW, cropH;
+    if (srcAspect > PORTRAIT_ASPECT) {
+      // Wider than the target (typical landscape webcam) — crop the sides, keep full height.
+      cropH = srcH;
+      cropW = Math.round(srcH * PORTRAIT_ASPECT);
+    } else {
+      // Narrower/taller than the target — crop top/bottom, keep full width.
+      cropW = srcW;
+      cropH = Math.round(srcW / PORTRAIT_ASPECT);
+    }
+    const cropX = Math.round((srcW - cropW) / 2);
+    const cropY = Math.round((srcH - cropH) / 2);
+
+    canvas.width = cropW;
+    canvas.height = cropH;
+    canvas.getContext('2d').drawImage(video, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
 
     canvas.toBlob(
       (blob) => {
@@ -403,12 +429,18 @@ export default function BoothTestPage() {
                 <div className="space-y-3">
                   {cameraActive ? (
                     <div className="space-y-3">
+                      {/* Laptop/webcam sensors are physically landscape hardware —
+                          getUserMedia's width/height are only "ideal" hints, so the
+                          browser hands back a landscape stream regardless of what's
+                          requested. aspect-[9/16] + object-cover center-crops the
+                          live preview to portrait so what's framed here matches what
+                          capturePhoto() below actually crops and saves. */}
                       <video
                         ref={videoRef}
                         autoPlay
                         muted
                         playsInline
-                        className="w-full max-w-sm rounded-lg bg-black mx-auto"
+                        className="w-full max-w-sm aspect-[9/16] object-cover rounded-lg bg-black mx-auto"
                       />
                       <div className="flex gap-2 justify-center">
                         <button

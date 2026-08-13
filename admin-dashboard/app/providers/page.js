@@ -244,12 +244,6 @@ function KeyCard({ apiKey, canManage, onChanged }) {
   const [newModel, setNewModel] = useState('');
   const [addingModel, setAddingModel] = useState(false);
 
-  const dirty =
-    keyIdentifier !== apiKey.keyIdentifier ||
-    String(dailyLimit) !== String(apiKey.dailyLimit ?? '') ||
-    isActive !== apiKey.isActive ||
-    secretInput.trim().length > 0;
-
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -263,6 +257,7 @@ function KeyCard({ apiKey, canManage, onChanged }) {
       });
       setSecretInput('');
       onChanged();
+      alert(`Saved — "${keyIdentifier}" was updated successfully.`);
     } catch (err) {
       alert(err.response?.data?.message || 'Failed to save key');
     } finally {
@@ -287,9 +282,11 @@ function KeyCard({ apiKey, canManage, onChanged }) {
     if (!newModel.trim()) return;
     setAddingModel(true);
     try {
-      await api.post(`/ai-providers/keys/${apiKey.id}/models`, { model: newModel.trim() });
+      const addedModel = newModel.trim();
+      await api.post(`/ai-providers/keys/${apiKey.id}/models`, { model: addedModel });
       setNewModel('');
       onChanged();
+      alert(`Saved — model "${addedModel}" was added to this key.`);
     } catch (err) {
       alert(err.response?.data?.message || 'Failed to add model');
     } finally {
@@ -424,7 +421,7 @@ function KeyCard({ apiKey, canManage, onChanged }) {
         <div className="flex gap-2">
           <button
             onClick={handleSave}
-            disabled={saving || !dirty}
+            disabled={saving}
             className="flex-1 bg-[#2563eb] hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors"
           >
             {saving ? 'Saving…' : 'Save'}
@@ -472,6 +469,7 @@ function AddKeyModal({ open, provider, onClose, onSaved }) {
         dailyLimit: dailyLimit === '' ? undefined : Number(dailyLimit),
       });
       onSaved();
+      alert(`Saved — key "${keyIdentifier}" was added. Add a model to it before it can be used in a campaign.`);
     } catch (err) {
       const msg = err.response?.data?.message;
       setError(Array.isArray(msg) ? msg.join(', ') : msg || 'Failed to add key');
@@ -546,6 +544,7 @@ function AddProviderModal({ open, onClose, onSaved }) {
     setError('');
     try {
       await api.post('/ai-providers', { name, baseUrl });
+      alert(`Saved — provider "${name}" was created.`);
       setName('');
       setBaseUrl('');
       onSaved();

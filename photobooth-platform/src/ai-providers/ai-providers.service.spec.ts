@@ -42,6 +42,10 @@ describe('AiProvidersService — key selection', () => {
   const mockPrisma = {
     campaignApiKey: { findMany: jest.fn() },
     apiKey: { update: jest.fn(), findUnique: jest.fn() },
+    // getAvailableKey() looks up the campaign's slug for its log lines —
+    // not part of the selection logic under test, just needs a mock so
+    // that call doesn't throw.
+    campaign: { findUnique: jest.fn().mockResolvedValue({ slug: 'campaign-1' }) },
   };
 
   const makeKey = (apiKeyOverrides: Record<string, any> = {}) => ({

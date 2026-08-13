@@ -105,9 +105,13 @@ export class SubmissionsService {
       throw new BadRequestException('Uploaded file is not a valid image');
     }
 
-    // 4. Optimize the image before storing
+    // 4. Detect orientation — the uploaded photo is stored and used exactly
+    // as submitted, no resize or re-encode. It used to be JPEG/PNG
+    // re-compressed at quality 90 (and downscaled if larger than the
+    // campaign's output dimensions) here, which lost quality on every single
+    // submission before the AI provider or the person ever saw it.
     const photoSettings = (campaign.photoSettings as any) || {};
-    let optimizedBuffer: Buffer;
+    const optimizedBuffer: Buffer = file.buffer;
     // Auto-detected below from actual image dimensions when neither the
     // booth nor the campaign specified one — previously computed here and
     // then never read, so every submission silently fell back to 'portrait'
@@ -115,32 +119,11 @@ export class SubmissionsService {
     let orientation: string;
 
     try {
-      let sharpInstance = sharp(file.buffer);
-      const metadata = await sharpInstance.metadata();
-
+      const metadata = await sharp(file.buffer).metadata();
       orientation = dto.orientation || photoSettings.orientation ||
         (metadata.width > metadata.height ? 'landscape' : 'portrait');
-
-      // Resize if larger than max dimensions (preserve aspect ratio)
-      const maxWidth = photoSettings.outputWidth || 1920;
-      const maxHeight = photoSettings.outputHeight || 1080;
-
-      if (metadata.width > maxWidth || metadata.height > maxHeight) {
-        sharpInstance = sharp(file.buffer).resize(maxWidth, maxHeight, {
-          fit: 'inside',
-          withoutEnlargement: true,
-        });
-      }
-
-      // Convert to JPEG for consistency (unless PNG transparency is needed)
-      if (file.mimetype !== 'image/png') {
-        optimizedBuffer = await sharpInstance.jpeg({ quality: 90 }).toBuffer();
-      } else {
-        optimizedBuffer = await sharpInstance.png({ quality: 90 }).toBuffer();
-      }
     } catch (err) {
-      this.logger.warn('Image optimization failed, using original: ' + err.message);
-      optimizedBuffer = file.buffer;
+      this.logger.warn('Orientation detection failed, defaulting: ' + err.message);
       orientation = dto.orientation || photoSettings.orientation || 'portrait';
     }
 

@@ -73,6 +73,9 @@ export class ProcessingService {
   ): Promise<AiGenerationResult> {
     const errors: string[] = [];
 
+    this.logger.log('─── KEY CHAIN SELECTION START ───');
+    this.logger.log(`Chain has ${keyChain.length} entr${keyChain.length === 1 ? 'y' : 'ies'}, trying in order: ${keyChain.join(', ')}`);
+
     for (const chainEntryId of keyChain) {
       const apiKeyModel = await this.prisma.apiKeyModel.findUnique({
         where: { id: chainEntryId },
@@ -88,6 +91,7 @@ export class ProcessingService {
       const keyRecord = apiKeyModel.apiKey;
       const model = apiKeyModel.model || fallbackModel;
       const label = `${keyRecord.provider.name} / ${model}`;
+      this.logger.log(`Chain entry ${chainEntryId} — key "${keyRecord.keyIdentifier}" (${label}), errors: ${keyRecord.errorCount}, usage: ${keyRecord.usageToday}/${keyRecord.dailyLimit ?? '∞'}`);
 
       if (!keyRecord.isActive) {
         this.logger.warn(`Key ${keyRecord.id} (${label}) is inactive, skipping`);
@@ -123,6 +127,7 @@ export class ProcessingService {
         });
         const responseTime = Date.now() - startedAt;
         await this.aiProvidersService.recordKeyUsage(keyRecord.id, true, responseTime);
+        this.logger.log(`─── KEY CHAIN SELECTION END (selected: "${keyRecord.keyIdentifier}") ───`);
 
         return {
           resultBuffer: result.imageBuffer,
@@ -141,6 +146,7 @@ export class ProcessingService {
       }
     }
 
+    this.logger.warn('─── KEY CHAIN SELECTION END (all entries exhausted) ───');
     throw new Error(`All AI providers in the key chain failed. Errors: ${errors.join(' | ') || 'no keys configured'}`);
   }
 

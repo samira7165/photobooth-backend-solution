@@ -1,11 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import api from '@/lib/api';
 import DashboardLayout from '@/components/DashboardLayout';
-import AiModelConfigSection, { flattenProviderKeys } from '@/components/AiModelConfigSection';
-import { StagedAssetSection, uploadStagedItems } from '@/components/StagedAssetSection';
+import AiModelConfigSection, { flattenProviderKeys, countAllKeys } from '@/components/AiModelConfigSection';
+import { StagedAssetSection, EnabledAssetGrid } from '@/components/StagedAssetSection';
 import { COLLECT_FIELD_OPTIONS } from '@/lib/utils';
 
 function slugify(value) {
@@ -37,17 +37,14 @@ export default function CreateCampaignPage() {
 
   const [aiKeys, setAiKeys] = useState([]);
   const [aiKeysLoading, setAiKeysLoading] = useState(true);
+  const [totalKeysCount, setTotalKeysCount] = useState(0);
   const [keyChain, setKeyChain] = useState(['']);
   const [aiPrompt, setAiPrompt] = useState('');
 
   const [backgroundsEnabled, setBackgroundsEnabled] = useState(false);
-  const [backgroundsItems, setBackgroundsItems] = useState([]);
   const [framesEnabled, setFramesEnabled] = useState(false);
-  const [framesItems, setFramesItems] = useState([]);
   const [propsEnabled, setPropsEnabled] = useState(false);
-  const [propsItems, setPropsItems] = useState([]);
   const [templatesEnabled, setTemplatesEnabled] = useState(false);
-  const [templatesItems, setTemplatesItems] = useState([]);
 
   // Set once the campaign is actually created — the integrationConfig it
   // carries contains a plaintext API key shown only this one time (see
@@ -55,10 +52,66 @@ export default function CreateCampaignPage() {
   // the form is replaced with a "download this now" screen first.
   const [createdCampaign, setCreatedCampaign] = useState(null);
 
+  // The moment the admin adds their first Background/Frame/Prop/Template,
+  // there's no campaign to attach it to yet — creating one right then (as a
+  // DRAFT, using whatever Name/Slug/Processing Mode has been filled in so
+  // far) means that upload, and every one after it, saves for real
+  // immediately instead of sitting in browser memory until the whole form
+  // is submitted. "Create Campaign" below then just finalizes this same
+  // draft's settings (PATCH) instead of creating a second campaign.
+  const [draftCampaignId, setDraftCampaignId] = useState(null);
+  const [draftIntegrationConfig, setDraftIntegrationConfig] = useState(null);
+  // Guards against a burst of near-simultaneous "+ Add" clicks (different
+  // sections) each racing to create their own draft — every caller awaits
+  // this same in-flight request instead.
+  const draftCreationRef = useRef(null);
+
+  const ensureDraftCampaign = async () => {
+    if (draftCampaignId) return draftCampaignId;
+    if (draftCreationRef.current) return draftCreationRef.current;
+
+    const promise = (async () => {
+      const baseSlug = form.slug || slugify(form.name) || `draft-${Date.now()}`;
+      let slug = baseSlug;
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          const res = await api.post('/campaigns', {
+            name: form.name || 'Untitled Campaign',
+            slug,
+            processingMode: form.processingMode,
+          });
+          setDraftCampaignId(res.data.id);
+          setDraftIntegrationConfig(res.data.integrationConfig || null);
+          return res.data.id;
+        } catch (err) {
+          // This is an internal placeholder slug at this point (the real
+          // one, if different, gets set for real when the form is finally
+          // submitted below) — a collision here isn't something to bother
+          // the admin with, just retry with a random suffix.
+          if (err.response?.status === 409 && attempt < 5) {
+            slug = `${baseSlug}-${Math.random().toString(36).slice(2, 6)}`;
+            continue;
+          }
+          throw err;
+        }
+      }
+    })();
+
+    draftCreationRef.current = promise;
+    try {
+      return await promise;
+    } finally {
+      draftCreationRef.current = null;
+    }
+  };
+
   useEffect(() => {
     api
       .get('/ai-providers')
-      .then((res) => setAiKeys(flattenProviderKeys(res.data)))
+      .then((res) => {
+        setAiKeys(flattenProviderKeys(res.data));
+        setTotalKeysCount(countAllKeys(res.data));
+      })
       .catch(() => setAiKeys([]))
       .finally(() => setAiKeysLoading(false));
   }, []);
@@ -103,7 +156,7 @@ export default function CreateCampaignPage() {
           }
         : undefined;
 
-      const res = await api.post('/campaigns', {
+      const body = {
         name: form.name,
         slug: form.slug,
         processingMode: form.processingMode,
@@ -122,29 +175,25 @@ export default function CreateCampaignPage() {
         ...(aiConfig && { aiConfig }),
         collectFields: form.collectFields,
         outputMode: form.outputMode,
-      });
+      };
 
-      const campaignId = res.data.id;
-      const integrationConfig = res.data.integrationConfig;
-
-      // Staged assets couldn't be uploaded until just now — they need a real
-      // campaign ID, which didn't exist until the POST above succeeded.
-      //
-      // Deliberately NOT gated on backgroundsEnabled/etc. here — those only
-      // control whether the config's "enabled" flag is on (i.e. whether the
-      // booth shows the picker), not whether staged items get saved. Files
-      // can only be staged while the checkbox is checked (see
-      // StagedAssetSection), but if it's unchecked again before Submit —
-      // even just to collapse the panel — the items are still sitting in
-      // state and the admin's intent was clearly "save what I added."
-      // Gating the upload on the checkbox's final state would silently
-      // discard already-staged files with no warning.
-      await Promise.allSettled([
-        backgroundsItems.length > 0 && uploadStagedItems('backgrounds', campaignId, backgroundsItems),
-        framesItems.length > 0 && uploadStagedItems('frames', campaignId, framesItems),
-        propsItems.length > 0 && uploadStagedItems('props', campaignId, propsItems),
-        templatesItems.length > 0 && uploadStagedItems('templates', campaignId, templatesItems),
-      ]);
+      // If any Background/Frame/Prop/Template was already added, a DRAFT
+      // campaign was created for real back when that happened (see
+      // ensureDraftCampaign) — finalizing just means updating that same
+      // campaign's settings (PATCH), not creating a second one. Its
+      // integrationConfig was already captured then too, since PATCH
+      // doesn't return one.
+      let campaignId;
+      let integrationConfig;
+      if (draftCampaignId) {
+        campaignId = draftCampaignId;
+        integrationConfig = draftIntegrationConfig;
+        await api.patch(`/campaigns/${campaignId}`, body);
+      } else {
+        const res = await api.post('/campaigns', body);
+        campaignId = res.data.id;
+        integrationConfig = res.data.integrationConfig;
+      }
 
       // chain entries are ApiKeyModel ids (one key can appear more than once
       // under different models) — link the underlying key once per unique
@@ -279,6 +328,7 @@ export default function CreateCampaignPage() {
             prompt={aiPrompt}
             onPromptChange={setAiPrompt}
             required
+            totalKeysCount={totalKeysCount}
           />
         )}
 
@@ -325,13 +375,22 @@ export default function CreateCampaignPage() {
         </Section>
 
         <Section title="Backgrounds">
-          <StagedAssetSection
-            kind="backgrounds"
-            enabled={backgroundsEnabled}
-            onEnabledChange={setBackgroundsEnabled}
-            items={backgroundsItems}
-            onItemsChange={setBackgroundsItems}
-          />
+          {draftCampaignId ? (
+            <EnabledAssetGrid
+              kind="backgrounds"
+              enabled={backgroundsEnabled}
+              onEnabledChange={setBackgroundsEnabled}
+              campaignId={draftCampaignId}
+              canManage
+            />
+          ) : (
+            <StagedAssetSection
+              kind="backgrounds"
+              enabled={backgroundsEnabled}
+              onEnabledChange={setBackgroundsEnabled}
+              onEnsureCampaign={ensureDraftCampaign}
+            />
+          )}
           <label className="flex items-start gap-2.5 text-sm text-gray-300 pt-1 border-t border-white/5">
             <input
               type="checkbox"
@@ -350,34 +409,61 @@ export default function CreateCampaignPage() {
         </Section>
 
         <Section title="Frames">
-          <StagedAssetSection
-            kind="frames"
-            enabled={framesEnabled}
-            onEnabledChange={setFramesEnabled}
-            items={framesItems}
-            onItemsChange={setFramesItems}
-          />
+          {draftCampaignId ? (
+            <EnabledAssetGrid
+              kind="frames"
+              enabled={framesEnabled}
+              onEnabledChange={setFramesEnabled}
+              campaignId={draftCampaignId}
+              canManage
+            />
+          ) : (
+            <StagedAssetSection
+              kind="frames"
+              enabled={framesEnabled}
+              onEnabledChange={setFramesEnabled}
+              onEnsureCampaign={ensureDraftCampaign}
+            />
+          )}
         </Section>
 
         <Section title="Props">
-          <StagedAssetSection
-            kind="props"
-            enabled={propsEnabled}
-            onEnabledChange={setPropsEnabled}
-            items={propsItems}
-            onItemsChange={setPropsItems}
-          />
+          {draftCampaignId ? (
+            <EnabledAssetGrid
+              kind="props"
+              enabled={propsEnabled}
+              onEnabledChange={setPropsEnabled}
+              campaignId={draftCampaignId}
+              canManage
+            />
+          ) : (
+            <StagedAssetSection
+              kind="props"
+              enabled={propsEnabled}
+              onEnabledChange={setPropsEnabled}
+              onEnsureCampaign={ensureDraftCampaign}
+            />
+          )}
         </Section>
 
         {aiModeSelected && (
           <Section title="AI Templates">
-            <StagedAssetSection
-              kind="templates"
-              enabled={templatesEnabled}
-              onEnabledChange={setTemplatesEnabled}
-              items={templatesItems}
-              onItemsChange={setTemplatesItems}
-            />
+            {draftCampaignId ? (
+              <EnabledAssetGrid
+                kind="templates"
+                enabled={templatesEnabled}
+                onEnabledChange={setTemplatesEnabled}
+                campaignId={draftCampaignId}
+                canManage
+              />
+            ) : (
+              <StagedAssetSection
+                kind="templates"
+                enabled={templatesEnabled}
+                onEnabledChange={setTemplatesEnabled}
+                onEnsureCampaign={ensureDraftCampaign}
+              />
+            )}
           </Section>
         )}
 
@@ -416,11 +502,26 @@ export default function CreateCampaignPage() {
             disabled={saving}
             className="bg-[#2563eb] hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg px-5 py-2.5 transition-colors"
           >
-            {saving ? 'Creating…' : 'Create Campaign'}
+            {saving ? 'Saving…' : draftCampaignId ? 'Finish Campaign' : 'Create Campaign'}
           </button>
           <button
             type="button"
-            onClick={() => router.push('/campaigns')}
+            onClick={async () => {
+              // Anything added so far is already saved for real against
+              // draftCampaignId — leaving without finishing would abandon a
+              // half-configured DRAFT campaign in the database with no way
+              // back to it from this screen, so offer to delete it outright
+              // rather than silently orphaning it.
+              if (draftCampaignId) {
+                if (!confirm('This will delete the draft campaign and everything added to it so far. Continue?')) return;
+                try {
+                  await api.delete(`/campaigns/${draftCampaignId}`);
+                } catch (err) {
+                  console.error('Failed to delete abandoned draft campaign:', err);
+                }
+              }
+              router.push('/campaigns');
+            }}
             className="border border-white/10 hover:bg-white/5 text-gray-300 text-sm font-medium rounded-lg px-5 py-2.5 transition-colors"
           >
             Cancel

@@ -80,6 +80,7 @@ export function AssetGrid({ kind, campaignId, canManage }) {
       await api.post(`/assets/${kind}`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
+      alert(`Saved — "${name}" was uploaded successfully.`);
       setUploadOpen(false);
       resetForm();
       load();

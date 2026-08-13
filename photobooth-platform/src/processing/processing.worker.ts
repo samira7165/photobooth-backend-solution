@@ -51,6 +51,10 @@ export class ProcessingWorker extends WorkerHost {
     const { campaign } = submission;
     this.logger.log(`Processing submission ${submissionId} (attempt ${job.attemptsMade + 1})`);
 
+    console.log('\n========== CAMPAIGN AI CONFIG ==========');
+    console.log(JSON.stringify(campaign.aiConfig, null, 2));
+    console.log('=========================================\n');
+
     await this.prisma.submission.update({ where: { id: submissionId }, data: { status: 'PROCESSING' } });
     this.websocketGateway.notifyJobStatusUpdate(submissionId, campaign.slug, { status: 'PROCESSING', progress: 10 });
     await job.updateProgress(10);
@@ -129,6 +133,24 @@ export class ProcessingWorker extends WorkerHost {
       }
       const effectiveAiConfig = { ...aiConfig, prompt: template?.prompt || aiConfig.prompt };
 
+      // submission.promptUsed is only written to the DB once generation
+      // finishes (see aiMeta below and the update() call further down) — the
+      // submission loaded at the top of process() is from before that, so it
+      // reads NOT SET here every time. Not a bug — logged anyway since it's
+      // useful to see that explicitly rather than silently omit it.
+      console.log('\n========== PROMPT DEBUG ==========');
+      console.log('submission.promptUsed:', submission.promptUsed || 'NOT SET');
+      console.log('aiConfig.prompt:', aiConfig?.prompt || 'NOT SET');
+      console.log('template.prompt (if any):', template?.prompt || (template as any)?.aiPrompt || 'NOT SET');
+      console.log('FINAL prompt being sent:', effectiveAiConfig.prompt);
+      console.log('==================================\n');
+
+      // ProcessingService.generate() resolves a key internally (via
+      // AiProvidersService.getKeyWithFailover(), or a specific keyChain if
+      // the campaign has one configured) — logged here at the worker's own
+      // boundary so the full worker -> key selection -> result flow shows up
+      // together in the terminal.
+      this.logger.log(`Requesting API key for campaign: ${campaign.slug}`);
       const generation = await this.processingService.generate(
         campaign.id,
         generationInput,
@@ -137,6 +159,7 @@ export class ProcessingWorker extends WorkerHost {
         photoSettings.outputWidth || 1080,
         photoSettings.outputHeight || 1920,
       );
+      this.logger.log(`Got key: ${generation.keyId} from provider: ${generation.provider}`);
 
       const postProcessed = await this.imageService.postProcess(generation.resultBuffer, {
         campaignId: campaign.id,

@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsInt, IsArray, MinLength } from 'class-validator';
+import { IsString, IsOptional, IsInt, IsArray, Min, MinLength } from 'class-validator';
 
 export class CreateApiKeyDto {
   @IsString()
@@ -19,6 +19,7 @@ export class CreateApiKeyDto {
 
   @IsOptional()
   @IsInt()
+  @Min(1)
   dailyLimit?: number;
 
   // Campaigns this key is restricted to. Omit/leave empty to make it a
