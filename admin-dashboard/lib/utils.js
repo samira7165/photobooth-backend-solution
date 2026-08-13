@@ -59,6 +59,14 @@ export const CAMPAIGN_STATUS_COLORS = {
   ARCHIVED: 'bg-gray-600/20 text-gray-400 border-gray-600/40',
 };
 
+// Campaign processingMode is the free-text string "ai" / "non-ai" from the
+// backend — normalized to uppercase for the lookup so casing changes there
+// don't silently fall through to the gray default.
+export const PROCESSING_MODE_COLORS = {
+  AI: 'bg-purple-500/20 text-purple-300 border-purple-500/40',
+  'NON-AI': 'bg-slate-500/20 text-slate-300 border-slate-500/40',
+};
+
 // Mirrors CampaignsService.updateStatus()'s validTransitions in the backend —
 // keep in sync if that state machine changes.
 export const CAMPAIGN_STATUS_TRANSITIONS = {

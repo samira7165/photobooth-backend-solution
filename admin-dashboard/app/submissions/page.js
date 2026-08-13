@@ -1,10 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { Camera } from 'lucide-react';
 import api from '@/lib/api';
 import DashboardLayout from '@/components/DashboardLayout';
 import StatusBadge from '@/components/StatusBadge';
 import SubmissionDetailModal from '@/components/SubmissionDetailModal';
+import TableSkeleton from '@/components/TableSkeleton';
+import EmptyState from '@/components/EmptyState';
 import useCurrentUser from '@/lib/useCurrentUser';
 import { hasRole, formatDate, truncateId } from '@/lib/utils';
 
@@ -124,30 +127,48 @@ export default function SubmissionsPage() {
       )}
 
       <div className="bg-[#111111] border border-white/10 rounded-xl overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto max-h-[65vh] overflow-y-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-left text-gray-400 border-b border-white/10">
-                <th className="px-5 py-3 font-medium">ID</th>
-                <th className="px-5 py-3 font-medium">Campaign</th>
-                <th className="px-5 py-3 font-medium">User</th>
-                <th className="px-5 py-3 font-medium">Status</th>
-                <th className="px-5 py-3 font-medium">Mode</th>
-                <th className="px-5 py-3 font-medium">Created At</th>
-                <th className="px-5 py-3 font-medium"></th>
+              <tr className="text-left text-gray-400">
+                <th className="sticky top-0 z-10 bg-[#111111] px-5 py-3 font-medium border-b border-white/10">ID</th>
+                <th className="sticky top-0 z-10 bg-[#111111] px-5 py-3 font-medium border-b border-white/10">Campaign</th>
+                <th className="sticky top-0 z-10 bg-[#111111] px-5 py-3 font-medium border-b border-white/10">User</th>
+                <th className="sticky top-0 z-10 bg-[#111111] px-5 py-3 font-medium border-b border-white/10">Status</th>
+                <th className="sticky top-0 z-10 bg-[#111111] px-5 py-3 font-medium border-b border-white/10">Mode</th>
+                <th className="sticky top-0 z-10 bg-[#111111] px-5 py-3 font-medium border-b border-white/10">Created At</th>
+                <th className="sticky top-0 z-10 bg-[#111111] px-5 py-3 font-medium border-b border-white/10"></th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr>
-                  <td colSpan={7} className="px-5 py-8 text-center text-gray-500">
-                    Loading…
-                  </td>
-                </tr>
+                <TableSkeleton columns={7} widths={['w-16', 'w-32', 'w-28', 'w-20', 'w-14', 'w-36', 'w-12']} />
               ) : submissions.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-5 py-8 text-center text-gray-500">
-                    No submissions found
+                  <td colSpan={7}>
+                    <EmptyState
+                      icon={Camera}
+                      title="No submissions found"
+                      description={
+                        campaignFilter !== 'All' || statusFilter !== 'All'
+                          ? 'Nothing matches the current filters.'
+                          : 'Submissions will appear here once a booth starts receiving photos.'
+                      }
+                      action={
+                        (campaignFilter !== 'All' || statusFilter !== 'All') && (
+                          <button
+                            onClick={() => {
+                              setCampaignFilter('All');
+                              setStatusFilter('All');
+                              setPage(0);
+                            }}
+                            className="text-xs border border-white/10 hover:bg-white/5 text-gray-300 rounded-lg px-3 py-1.5 transition-colors"
+                          >
+                            Clear filters
+                          </button>
+                        )
+                      }
+                    />
                   </td>
                 </tr>
               ) : (
@@ -155,7 +176,7 @@ export default function SubmissionsPage() {
                   <tr
                     key={s.id}
                     onClick={() => setSelected(s)}
-                    className="border-b border-white/5 hover:bg-white/5 cursor-pointer"
+                    className="border-b border-white/10 last:border-0 hover:bg-white/5 cursor-pointer"
                   >
                     <td className="px-5 py-3 font-mono text-gray-400">{truncateId(s.id)}</td>
                     <td className="px-5 py-3 text-white">{s.campaign?.name || '—'}</td>

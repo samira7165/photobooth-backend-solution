@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Cookies from 'js-cookie';
+import { Camera, Loader2 } from 'lucide-react';
 import api from '@/lib/api';
 
 export default function LoginPage() {
@@ -36,12 +37,15 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#0a0a0a] px-4">
+    <div className="min-h-screen flex items-center justify-center bg-[radial-gradient(ellipse_80%_60%_at_50%_0%,_#132048_0%,_#0a0a0a_65%)] px-4">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
-          <div className="text-4xl mb-2">📸</div>
+          <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-gradient-to-br from-[#2563eb] to-purple-600 flex items-center justify-center shadow-lg shadow-blue-950/50">
+            <Camera size={28} className="text-white" strokeWidth={2} />
+          </div>
           <h1 className="text-2xl font-semibold text-white">XRI Photobooth Admin</h1>
-          <p className="text-sm text-gray-400 mt-1">Sign in to manage campaigns</p>
+          <div className="h-1 w-14 mx-auto mt-3 mb-3 rounded-full bg-gradient-to-r from-[#2563eb] to-purple-500" />
+          <p className="text-sm text-gray-400">Sign in to manage campaigns</p>
         </div>
 
         <form
@@ -61,19 +65,32 @@ export default function LoginPage() {
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="w-full bg-[#0a0a0a] border border-white/10 rounded-lg px-3 py-2.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#2563eb] focus:border-transparent"
+              className="w-full bg-[#0a0a0a] border border-white/10 rounded-lg px-4 py-3 text-white text-sm
+                focus:outline-none focus:ring-2 focus:ring-[#2563eb] focus:border-transparent
+                focus:shadow-[0_0_0_4px_rgba(37,99,235,0.15)] transition-shadow motion-reduce:transition-none"
               placeholder="admin@xri.com.bd"
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1.5">Password</label>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-sm font-medium text-gray-300">Password</label>
+              <button
+                type="button"
+                tabIndex={-1}
+                className="text-xs text-[#2563eb] hover:text-blue-400 hover:underline"
+              >
+                Forgot password?
+              </button>
+            </div>
             <input
               type="password"
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full bg-[#0a0a0a] border border-white/10 rounded-lg px-3 py-2.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#2563eb] focus:border-transparent"
+              className="w-full bg-[#0a0a0a] border border-white/10 rounded-lg px-4 py-3 text-white text-sm
+                focus:outline-none focus:ring-2 focus:ring-[#2563eb] focus:border-transparent
+                focus:shadow-[0_0_0_4px_rgba(37,99,235,0.15)] transition-shadow motion-reduce:transition-none"
               placeholder="••••••••"
             />
           </div>
@@ -81,9 +98,13 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-[#2563eb] hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg px-4 py-2.5 text-sm transition-colors"
+            className="w-full bg-[#2563eb] hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed text-white font-medium rounded-lg px-4 py-3 text-sm transition-colors flex items-center justify-center gap-2"
           >
-            {loading ? 'Signing in…' : 'Sign In'}
+            {loading ? (
+              <Loader2 size={16} className="animate-spin motion-reduce:animate-none" />
+            ) : (
+              'Sign In'
+            )}
           </button>
         </form>
       </div>
