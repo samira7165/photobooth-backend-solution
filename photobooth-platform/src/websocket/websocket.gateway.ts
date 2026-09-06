@@ -87,6 +87,18 @@ export class WebsocketGateway implements OnGatewayInit, OnGatewayConnection, OnG
 
   // ─── SERVER-SIDE EMIT METHODS (called by other services) ───
 
+  // This gateway is also loaded into the standalone worker's DI context
+  // (see worker.module.ts) so ProcessingWorker can call these from either
+  // process. NestFactory.createApplicationContext() (the worker's bootstrap)
+  // never creates an HTTP server, so `server` never gets attached there —
+  // every emit method below is a no-op in that context instead of throwing,
+  // since there's no socket connected to a standalone worker to notify
+  // anyway; real-time updates still reach clients via whichever process
+  // actually has the live connection (the API).
+  private hasServer(): boolean {
+    return !!this.server;
+  }
+
   // Notify booth that a job status changed
   notifyJobStatusUpdate(submissionId: string, campaignSlug: string, update: {
     status: string;
@@ -95,9 +107,11 @@ export class WebsocketGateway implements OnGatewayInit, OnGatewayConnection, OnG
     qrCodeUrl?: string;
     downloadUrl?: string;
     downloadCode?: string;
+    displayCode?: string;
     error?: string;
     processingTime?: number;
   }) {
+    if (!this.hasServer()) return;
     // Send to the specific submission room
     this.server.to(`submission:${submissionId}`).emit('job:status', {
       submissionId,
@@ -128,6 +142,7 @@ export class WebsocketGateway implements OnGatewayInit, OnGatewayConnection, OnG
     completed: number;
     failed: number;
   }) {
+    if (!this.hasServer()) return;
     this.server.to('admin').emit('admin:queue_stats', {
       ...stats,
       timestamp: new Date().toISOString(),
@@ -142,6 +157,7 @@ export class WebsocketGateway implements OnGatewayInit, OnGatewayConnection, OnG
     hallId?: string;
     mode: string;
   }) {
+    if (!this.hasServer()) return;
     this.server.to('admin').emit('admin:new_submission', {
       ...submission,
       timestamp: new Date().toISOString(),
@@ -150,6 +166,7 @@ export class WebsocketGateway implements OnGatewayInit, OnGatewayConnection, OnG
 
   // Notify about provider health changes
   notifyProviderHealth(provider: string, isHealthy: boolean, errorMessage?: string) {
+    if (!this.hasServer()) return;
     this.server.to('admin').emit('admin:provider_health', {
       provider,
       isHealthy,

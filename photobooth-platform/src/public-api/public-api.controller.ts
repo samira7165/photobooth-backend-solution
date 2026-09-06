@@ -1,6 +1,7 @@
 /// <reference types="multer" />
 import { Controller, Get, Post, Body, Param, Req, UseInterceptors, UploadedFile, UseFilters } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
 import { RequireApiKey } from '../common/decorators/require-api-key.decorator';
 import { CampaignsService } from '../campaigns/campaigns.service';
@@ -30,18 +31,21 @@ export class PublicApiController {
   ) {}
 
   @Get('config')
+  @Throttle({ default: { limit: 30, ttl: 60000 } }) // 30 requests per minute
   async getConfig(@Req() req: RequestWithCampaign) {
     const config = await this.campaignsService.getBoothConfig(req.campaign.slug);
     return wrapSuccess(config);
   }
 
   @Post('session')
+  @Throttle({ default: { limit: 10, ttl: 60000 } }) // 10 per minute
   async createSession(@Req() req: RequestWithCampaign, @Body() body: { hallId?: string }) {
     const session = await this.submissionsService.createSession(req.campaign.slug, body?.hallId);
     return wrapSuccess(session);
   }
 
   @Post('submit')
+  @Throttle({ default: { limit: 5, ttl: 60000 } }) // 5 per minute (heavy operation)
   @UseInterceptors(FileInterceptor('photo'))
   async submit(
     @Req() req: RequestWithCampaign,
@@ -57,12 +61,14 @@ export class PublicApiController {
   // GET /submissions/booth/status/:submissionId), not a new gap introduced
   // here.
   @Get('status/:submissionId')
+  @Throttle({ default: { limit: 60, ttl: 60000 } }) // 60 per minute (polling)
   async getStatus(@Param('submissionId') submissionId: string) {
     const status = await this.submissionsService.getStatus(submissionId);
     return wrapSuccess(status);
   }
 
   @Get('download/:code')
+  @Throttle({ default: { limit: 20, ttl: 60000 } }) // 20 per minute
   async getDownload(@Param('code') code: string) {
     // Info-only fetch — doesn't count as an actual download, same reasoning
     // as the guest-facing /dl/[code] page (see DeliveryController).

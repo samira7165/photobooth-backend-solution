@@ -146,4 +146,21 @@ export class StorageService {
   getCampaignPath(campaignSlug: string, assetType: string): string {
     return `campaigns/${campaignSlug}/${assetType}`;
   }
+
+  /**
+   * Turns a stored key (S3 key or bare local-disk relative path) into
+   * something a client can actually load — a presigned URL when S3 is
+   * configured, or the "/uploads/" path main.ts's static middleware serves
+   * from otherwise. The single implementation of "how do I turn a storage
+   * key into a loadable URL" — SubmissionsService.resolveDisplayUrl and
+   * AnalyticsService.exportToExcel both delegate to this instead of each
+   * re-deriving the same isConfigured()/getPresignedUrl() branch.
+   */
+  async resolveUrl(key: string | null | undefined): Promise<string | null> {
+    if (!key) return null;
+    if (this.isConfigured()) {
+      return this.getPresignedUrl(key);
+    }
+    return `/uploads/${key}`;
+  }
 }

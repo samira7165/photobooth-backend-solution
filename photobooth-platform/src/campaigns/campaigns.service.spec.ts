@@ -5,6 +5,7 @@ import { CampaignsService } from './campaigns.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { DeveloperKeysService } from '../developer-keys/developer-keys.service';
 import { CorsService } from '../common/services/cors.service';
+import { DeliveryService } from '../delivery/delivery.service';
 
 describe('CampaignsService', () => {
   let service: CampaignsService;
@@ -38,10 +39,17 @@ describe('CampaignsService', () => {
     clearCache: jest.fn(),
   };
 
+  // getBoothConfig() resolves deliveryConfig through DeliveryService —
+  // mocked here so tests don't need a real DeliveryService/database.
+  const mockDeliveryService = {
+    resolveDeliveryConfig: jest.fn().mockReturnValue({ qrCode: {}, shortCode: { enabled: true }, directLink: {}, print: {} }),
+  };
+
   beforeEach(async () => {
     jest.clearAllMocks();
     mockDeveloperKeysService.generateKey.mockResolvedValue({ key: 'pb_live_mock', keyPrefix: 'pb_live_mock' });
     mockConfigService.get.mockReturnValue('http://localhost:3000/api/v1/public');
+    mockDeliveryService.resolveDeliveryConfig.mockReturnValue({ qrCode: {}, shortCode: { enabled: true }, directLink: {}, print: {} });
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -50,6 +58,7 @@ describe('CampaignsService', () => {
         { provide: DeveloperKeysService, useValue: mockDeveloperKeysService },
         { provide: ConfigService, useValue: mockConfigService },
         { provide: CorsService, useValue: mockCorsService },
+        { provide: DeliveryService, useValue: mockDeliveryService },
       ],
     }).compile();
 

@@ -5,6 +5,7 @@ import { CreateCampaignDto } from './dto/create-campaign.dto';
 import { UpdateCampaignDto } from './dto/update-campaign.dto';
 import { DeveloperKeysService } from '../developer-keys/developer-keys.service';
 import { CorsService } from '../common/services/cors.service';
+import { DeliveryService } from '../delivery/delivery.service';
 
 // Campaign status follows a one-way state machine (see updateStatus below):
 // DRAFT -> ACTIVE -> PAUSED/COMPLETED -> ARCHIVED. Only updateStatus() is
@@ -17,6 +18,7 @@ export class CampaignsService {
     private developerKeysService: DeveloperKeysService,
     private config: ConfigService,
     private corsService: CorsService,
+    private deliveryService: DeliveryService,
   ) {}
 
   async create(dto: CreateCampaignDto, userId: string) {
@@ -31,6 +33,8 @@ export class CampaignsService {
       throw new BadRequestException('Slug must be lowercase letters, numbers, and hyphens only');
     }
 
+    this.validateDeliveryConfig(dto.deliveryConfig);
+
     const campaign = await this.prisma.campaign.create({
       data: {
         name: dto.name,
@@ -42,6 +46,11 @@ export class CampaignsService {
         frameConfig: dto.frameConfig || { enabled: false },
         propConfig: dto.propConfig || { enabled: false },
         qrConfig: dto.qrConfig || { enabled: true, position: { x: 900, y: 1750 }, size: 150, contentType: 'download-link' },
+        // Left unset (null) unless explicitly provided — resolveDeliveryConfig
+        // treats a null deliveryConfig as "fall back to qrConfig", which is
+        // exactly the right behavior for a campaign that never opted into
+        // multi-method delivery, not just for ones created before it existed.
+        ...(dto.deliveryConfig && { deliveryConfig: dto.deliveryConfig }),
         textConfig: dto.textConfig || { enabled: false },
         collectFields: dto.collectFields || ['name', 'phone'],
         outputMode: dto.outputMode || 'qr',
@@ -227,6 +236,8 @@ export class CampaignsService {
       }
     }
 
+    this.validateDeliveryConfig(dto.deliveryConfig);
+
     const data: any = { ...dto };
     if (dto.startDate) data.startDate = new Date(dto.startDate);
     if (dto.endDate) data.endDate = new Date(dto.endDate);
@@ -273,6 +284,40 @@ export class CampaignsService {
       );
     }
 
+    // Catches the exact misconfiguration a "Prothom Alo"-style campaign
+    // shipped with: AI mode, promptMode left at its "template" default, no
+    // template AND no default aiConfig.prompt — every submission would
+    // silently send Gemini/DALL-E the hardcoded generic fallback
+    // ('Enhance this photo', see ProcessingService.DEFAULT_PROMPT) instead
+    // of anything the admin actually intended, with no error anywhere to
+    // notice. This is a go-live gate, not the only protection — see the
+    // matching per-submission check in SubmissionsService.submitPhoto,
+    // which also covers a later edit that breaks an already-ACTIVE campaign.
+    if (status === 'ACTIVE' && (campaign.processingMode === 'ai' || campaign.processingMode === 'both')) {
+      const aiConfig = (campaign.aiConfig as any) || {};
+      const promptMode = aiConfig.promptMode || 'template';
+      const hasDefaultPrompt = !!aiConfig.prompt?.trim();
+
+      if (promptMode === 'prompt-option' || promptMode === 'both') {
+        const activeOptionCount = await this.prisma.promptOption.count({ where: { campaignId: id, isActive: true } });
+        const hasCustomInput = !!aiConfig.customInput?.enabled && !!aiConfig.customInput?.promptTemplate?.trim();
+        if (promptMode === 'prompt-option' && activeOptionCount === 0 && !hasCustomInput) {
+          throw new BadRequestException(
+            'Cannot activate: this campaign is set to Prompt Options mode but has no active prompt options and no custom-input prompt template configured. Add at least one prompt option, or enable custom input with a template, before going live.',
+          );
+        }
+      }
+
+      if (promptMode === 'template') {
+        const hasActiveTemplateWithPrompt = (campaign.templates || []).some((t: any) => t.isActive && t.prompt?.trim());
+        if (!hasDefaultPrompt && !hasActiveTemplateWithPrompt) {
+          throw new BadRequestException(
+            'Cannot activate: this AI campaign has no default AI prompt set and no active template with its own prompt. Every submission would silently use a generic fallback prompt instead of your intended one — set a default AI prompt, add a template with a prompt, or switch to Prompt Options mode first.',
+          );
+        }
+      }
+    }
+
     const updated = await this.prisma.campaign.update({
       where: { id },
       data: { status: status as any },
@@ -313,6 +358,35 @@ export class CampaignsService {
     return { message: 'Campaign deleted successfully' };
   }
 
+  // Enforces the specific business rules deliveryConfig needs that plain
+  // class-validator can't express on a loosely-typed @IsObject() field (the
+  // same shallow-typing convention every other JSON config field on
+  // CreateCampaignDto already uses — see aiConfig/qrConfig/etc.).
+  private validateDeliveryConfig(deliveryConfig: any): void {
+    if (!deliveryConfig) return;
+
+    const prefix = deliveryConfig.shortCode?.prefix;
+    if (prefix !== undefined && prefix !== null) {
+      if (typeof prefix !== 'string' || prefix.length > 10 || !/^[A-Z0-9]*$/.test(prefix)) {
+        throw new BadRequestException('deliveryConfig.shortCode.prefix must be up to 10 uppercase alphanumeric characters');
+      }
+    }
+
+    const codeLength = deliveryConfig.shortCode?.codeLength;
+    if (codeLength !== undefined && codeLength !== null) {
+      if (!Number.isInteger(codeLength) || codeLength < 4 || codeLength > 8) {
+        throw new BadRequestException('deliveryConfig.shortCode.codeLength must be an integer between 4 and 8');
+      }
+    }
+
+    const expiryHours = deliveryConfig.directLink?.expiryHours;
+    if (expiryHours !== undefined && expiryHours !== null) {
+      if (!Number.isInteger(expiryHours) || expiryHours < 1 || expiryHours > 168) {
+        throw new BadRequestException('deliveryConfig.directLink.expiryHours must be an integer between 1 and 168 (1 week max)');
+      }
+    }
+  }
+
   // ─── BOOTH-FACING ENDPOINT (PUBLIC) ───
   // Returns only what the booth client needs — settings, active props/frames/backgrounds
   async getBoothConfig(slug: string) {
@@ -325,12 +399,18 @@ export class CampaignsService {
         // No `prompt` here — that's a generation detail for the backend only,
         // never sent to the public booth endpoint.
         templates: { where: { isActive: true }, orderBy: { sortOrder: 'asc' }, select: { id: true, name: true, thumbnailUrl: true, imageUrl: true } },
+        // Same reasoning as templates above: `prompt` is never selected here.
+        // The booth only needs enough to render a selection screen.
+        promptOptions: { where: { isActive: true }, orderBy: { sortOrder: 'asc' }, select: { id: true, name: true, description: true, thumbnailUrl: true, sortOrder: true } },
       },
     });
 
     if (!campaign || campaign.status !== 'ACTIVE') {
       throw new NotFoundException('Campaign not found or not active');
     }
+
+    const aiConfig = (campaign.aiConfig as any) || {};
+    const customInputConfig = aiConfig.customInput || {};
 
     return {
       name: campaign.name,
@@ -342,10 +422,27 @@ export class CampaignsService {
       frames: campaign.frames,
       props: campaign.props,
       templates: campaign.templates,
+      // Unset defaults to "template" — existing campaigns (created before
+      // this field existed) keep behaving exactly as they do today.
+      promptMode: aiConfig.promptMode || 'template',
+      promptOptions: campaign.promptOptions,
+      // Only enough for the booth to render an "Other" input — promptTemplate
+      // is internal generation detail, same treatment as PromptOption.prompt
+      // above, never sent here.
+      customInput: {
+        enabled: !!customInputConfig.enabled,
+        label: customInputConfig.label || 'Type your own...',
+        maxLength: customInputConfig.maxLength || 50,
+      },
       backgroundConfig: campaign.backgroundConfig,
       frameConfig: campaign.frameConfig,
       propConfig: campaign.propConfig,
       textConfig: campaign.textConfig,
+      // Resolved (not raw) — a campaign with only the legacy qrConfig gets
+      // the exact same shape back, with shortCode/directLink/print at their
+      // backward-compatible defaults, so the booth never has to know
+      // whether this campaign has deliveryConfig or is still on qrConfig.
+      deliveryConfig: this.deliveryService.resolveDeliveryConfig(campaign),
     };
   }
 }

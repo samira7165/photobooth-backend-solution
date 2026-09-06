@@ -42,6 +42,28 @@ export class CreateSubmissionDto {
   @MaxLength(255)
   templateId?: string;
 
+  // Which no-reference-image PromptOption the booth user picked instead of a
+  // Template (AI mode only, campaigns with aiConfig.promptMode
+  // "prompt-option"/"both" — see the PromptOption model comment in
+  // schema.prisma). Mutually exclusive with templateId in practice, though
+  // both stay independently optional here — SubmissionsService.submitPhoto
+  // is what actually enforces which one a given campaign requires.
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  promptOptionId?: string;
+
+  // What the booth user typed for the campaign-level "Other" option
+  // (aiConfig.customInput — see the field comment on Campaign.aiConfig in
+  // schema.prisma). Mutually exclusive with promptOptionId — submitPhoto
+  // rejects a request sending both. The DTO-level cap here is just a sane
+  // outer bound; the real limit is the campaign's own configured
+  // aiConfig.customInput.maxLength, enforced in SubmissionsService.
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  customInput?: string;
+
   // multipart/form-data collapses a single repeated field down to a bare
   // string instead of a one-element array (multiple occurrences of the same
   // field name is what produces an array) — normalize before @IsArray() runs
@@ -61,4 +83,12 @@ export class CreateSubmissionDto {
   @IsString()
   @MaxLength(20)
   orientation?: string; // "portrait" or "landscape"
+
+  // Distinguishes a video-response booth (e.g. Dream Job) from the default
+  // photo flow — see SubmissionsService.submitPhoto's isVideo branch. Only
+  // 'video' has any effect; anything else (including omitted) is a photo.
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  submissionType?: string;
 }

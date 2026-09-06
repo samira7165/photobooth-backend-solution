@@ -13,6 +13,55 @@ export function resolveImageUrl(url) {
   return `${API_ORIGIN}/uploads/${url}`;
 }
 
+// Fetches the image into a Blob first rather than a plain `<a href download>`
+// — the `download` attribute is silently ignored by browsers for a
+// cross-origin href (the dashboard on :3001 fetching from the API on :3000,
+// or a presigned S3 URL), so without this the browser would just navigate to
+// the image instead of downloading it. Same technique already used for the
+// integration-config JSON download on the campaign detail page.
+export async function downloadFile(url, filename) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Download failed (HTTP ${res.status})`);
+  const blob = await res.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = objectUrl;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(objectUrl);
+}
+
+// Opens a plain new window with just the image and triggers the browser's
+// native print dialog once it's actually loaded — printing directly out of
+// the dashboard page itself would print the whole page chrome (sidebar,
+// nav, other rows) along with it.
+export function printImageUrl(url) {
+  const win = window.open('', '_blank', 'width=800,height=900');
+  if (!win) {
+    alert('Please allow pop-ups for this site to print.');
+    return;
+  }
+  win.document.write(
+    '<!DOCTYPE html><html><head><title>Print</title><style>' +
+      'body{margin:0;display:flex;align-items:center;justify-content:center;background:#fff;min-height:100vh;}' +
+      'img{max-width:100%;max-height:100vh;}' +
+      '</style></head><body><img id="print-target" alt="" /></body></html>',
+  );
+  win.document.close();
+  const img = win.document.getElementById('print-target');
+  const triggerPrint = () => {
+    win.focus();
+    win.print();
+  };
+  img.onload = triggerPrint;
+  img.onerror = () => {
+    win.document.body.textContent = 'Failed to load image.';
+  };
+  img.src = url;
+}
+
 export const COLLECT_FIELD_OPTIONS = ['name', 'phone', 'email'];
 
 export function formatDate(value) {

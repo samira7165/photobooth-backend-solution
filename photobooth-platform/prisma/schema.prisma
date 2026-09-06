@@ -1,5 +1,6 @@
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
 }
 
 datasource db {
@@ -52,12 +53,31 @@ model Campaign {
 
   // All config as flexible JSON
   brandConfig     Json?           // { logo, primaryColor, secondaryColor, backgroundColor, fontFamily }
-  aiConfig        Json?           // { provider, model, prompt, strength, fallbackProviders, allowCustomPrompt, referenceImage, aiBackgroundGeneration, aiBackgroundPrompt }
+  // { provider, model, prompt, strength, fallbackProviders, allowCustomPrompt, referenceImage, aiBackgroundGeneration, aiBackgroundPrompt,
+  //   promptMode: "template" (default, unset behaves the same) | "prompt-option" | "both" — see the PromptOption model comment
+  //   customInput: { enabled, label, maxLength, promptTemplate } — an optional campaign-level "Other" choice alongside
+  //     PromptOption rows, only meaningful when promptMode is "prompt-option"/"both". promptTemplate contains a literal
+  //     "{user_input}" placeholder substituted with the booth user's typed text (see common/utils/custom-prompt.util.ts).
+  //     promptTemplate is internal generation detail, same as PromptOption.prompt — never sent to a booth-facing endpoint. }
+  aiConfig        Json?
   photoSettings   Json?           // { orientation, outputWidth, outputHeight }
   backgroundConfig Json?          // { removal, allowCustomUpload, defaultBackgroundId }
   frameConfig     Json?           // { enabled, defaultFrameId }
   propConfig      Json?           // { enabled }
   qrConfig        Json?           // { enabled, position: {x,y}, size, contentType, customContent, embedInImage }
+  // Superset of qrConfig above, covering every delivery method at once:
+  // { qrCode: {enabled, position, size, contentType, customContent, embedInImage},
+  //   shortCode: {enabled, prefix, codeLength},
+  //   directLink: {enabled, expiryHours},
+  //   print: {enabled, format, copies} }
+  // Null on every campaign created before this existed — DeliveryService
+  // resolves the effective config by falling back to qrConfig (folded into
+  // deliveryConfig.qrCode) whenever this is null, so old campaigns keep
+  // behaving exactly as before (QR only, no shortCode/directLink surfaced,
+  // codes never expire). print.enabled is stored/exposed only — there is no
+  // physical printer integration anywhere in this codebase to actually act
+  // on it (see the print-tracking PrintStatus enum comment above).
+  deliveryConfig  Json?
   textConfig      Json?           // { enabled, content, position: {x,y}, font, color, size, allowCustomText }
   collectFields   Json            @default("[\"name\", \"phone\"]") // which user info fields to collect
   outputMode      String          @default("qr") // "qr", "download", "print", "sms", "email"
@@ -83,6 +103,7 @@ model Campaign {
   frames          Frame[]
   props           Prop[]
   templates       Template[]
+  promptOptions   PromptOption[]
   apiKeyLinks     CampaignApiKey[]
   developerApiKeys DeveloperApiKey[]
 
@@ -181,6 +202,34 @@ model Template {
   @@map("templates")
 }
 
+// ─── PROMPT OPTIONS ───
+// A booth-selectable text prompt for campaigns that don't use a reference-
+// image Template (aiConfig.promptMode "prompt-option" or "both" — see the
+// promptMode comment on Campaign.aiConfig). The booth shows these like
+// templates/backgrounds, but picking one sends ONLY the user's own photo to
+// the AI provider — no second reference image — along with this row's
+// `prompt` text. That text is internal generation detail and must never be
+// returned by a booth-facing endpoint (see CampaignsService.getBoothConfig).
+
+model PromptOption {
+  id           String   @id @default(uuid())
+  campaignId   String
+  name         String   // "Doctor", "Astronaut" — what the user sees on screen
+  description  String?  // optional short description shown below the name
+  prompt       String   @db.Text // the full AI prompt sent to the provider
+  thumbnailUrl String?  // optional preview image shown on the booth selection screen
+  sortOrder    Int      @default(0)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  campaign     Campaign     @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  submissions  Submission[]
+
+  @@index([campaignId])
+  @@map("prompt_options")
+}
+
 // ─── SUBMISSIONS ───
 
 enum SubmissionStatus {
@@ -188,6 +237,21 @@ enum SubmissionStatus {
   QUEUED
   PROCESSING
   COMPLETED
+  FAILED
+}
+
+// Tracks a physical print of a submission's result, independent of
+// SubmissionStatus (a submission is COMPLETED long before/regardless of
+// whether it's ever printed — same relationship downloadCode/downloadCount
+// below have to status). PRINTING exists for a future real printer-hardware
+// integration to report through; today there is none (see the comment on
+// SubmissionsService.print()), so the only transitions actually exercised
+// are NOT_PRINTED/FAILED -> PRINT_REQUESTED -> PRINTED.
+enum PrintStatus {
+  NOT_PRINTED
+  PRINT_REQUESTED
+  PRINTING
+  PRINTED
   FAILED
 }
 
@@ -213,6 +277,13 @@ model Submission {
   frameUsed       String?           // frame ID or null
   propsUsed       Json?             // array of prop IDs used
   templateUsed    String?           // Template ID (AI reference image + style prompt), or null
+  promptOptionId  String?           // PromptOption ID the user picked (no-reference-image mode), or null
+  // Raw text the user typed for the campaign-level "Other" custom-input
+  // option (aiConfig.customInput — see the field comment on Campaign.aiConfig),
+  // mutually exclusive with promptOptionId. The resolved prompt (template with
+  // {user_input} substituted) is NOT stored separately from promptUsed below —
+  // this column is only the user's raw input, for admin visibility/audit.
+  customInput     String?           @db.Text
   orientation     String?           // "portrait" or "landscape"
 
   // AI specific
@@ -232,17 +303,36 @@ model Submission {
 
   // Output
   qrCodeUrl       String?
-  downloadCode    String?           @unique
+  downloadCode    String?           @unique // raw lookup key, e.g. "4K7X" — never includes the campaign's shortCode prefix
+  displayCode     String?           // what the user sees/types, e.g. "DREAM-4K7X" (== downloadCode when the campaign has no prefix configured)
+  downloadCodeExpiresAt DateTime?   // null = never expires (matches every campaign that predates deliveryConfig.directLink.expiryHours)
   downloadCount   Int               @default(0)
+
+  // Print tracking — see the PrintStatus comment above. A NOT NULL column
+  // with a default backfills every pre-existing row to NOT_PRINTED on
+  // migration, so historical submissions are never mistakenly reported as
+  // already printed.
+  printStatus     PrintStatus       @default(NOT_PRINTED)
+  printedAt       DateTime?
+  printerId       String?           // optional booth/printer identifier, if the caller sends one
+  printAttempts   Int               @default(0)
+  printError      String?           @db.Text
 
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
 
   campaign        Campaign          @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  // SetNull (not the schema-wide default) deliberately, unlike Campaign's
+  // cascade above — deleting a PromptOption must never delete or block
+  // deletion of the submission history that used it; it should just forget
+  // which option it was.
+  promptOption    PromptOption?     @relation(fields: [promptOptionId], references: [id], onDelete: SetNull)
 
   @@index([campaignId])
   @@index([status])
+  @@index([printStatus])
   @@index([createdAt])
+  @@index([promptOptionId])
   // No separate @@index([downloadCode]) — @unique above already creates one.
   @@map("submissions")
 }

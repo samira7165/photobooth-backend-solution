@@ -3,6 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import sharp from 'sharp';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { ImageService } from '../image/image.service';
@@ -11,6 +12,7 @@ import { DeliveryService } from '../delivery/delivery.service';
 import { WebsocketGateway } from '../websocket/websocket.gateway';
 import { ProcessingService } from './processing.service';
 import { PHOTO_PROCESSING_QUEUE } from '../queue/queue.service';
+import { buildCustomPrompt } from '../common/utils/custom-prompt.util';
 
 interface ProcessSubmissionJobData {
   submissionId: string;
@@ -22,6 +24,7 @@ interface ProcessSubmissionJobData {
 @Injectable()
 export class ProcessingWorker extends WorkerHost {
   private logger = new Logger(ProcessingWorker.name);
+  private readonly isDebug = process.env.NODE_ENV !== 'production';
 
   constructor(
     private prisma: PrismaService,
@@ -51,15 +54,17 @@ export class ProcessingWorker extends WorkerHost {
     const { campaign } = submission;
     this.logger.log(`Processing submission ${submissionId} (attempt ${job.attemptsMade + 1})`);
 
-    console.log('\n========== CAMPAIGN AI CONFIG ==========');
-    console.log(JSON.stringify(campaign.aiConfig, null, 2));
-    console.log('=========================================\n');
+    if (this.isDebug) {
+      console.log('\n========== CAMPAIGN AI CONFIG ==========');
+      console.log(JSON.stringify(campaign.aiConfig, null, 2));
+      console.log('=========================================\n');
+    }
 
     await this.prisma.submission.update({ where: { id: submissionId }, data: { status: 'PROCESSING' } });
     this.websocketGateway.notifyJobStatusUpdate(submissionId, campaign.slug, { status: 'PROCESSING', progress: 10 });
     await job.updateProgress(10);
 
-    const originalBuffer = await this.loadOriginal(submission.originalUrl);
+    const originalBuffer = await this.normalizeOrientation(await this.loadOriginal(submission.originalUrl));
     await job.updateProgress(30);
 
     const photoSettings = (campaign.photoSettings as any) || {};
@@ -115,6 +120,7 @@ export class ProcessingWorker extends WorkerHost {
       // campaign's default for just this submission.
       let referenceImageBuffer: Buffer | undefined;
       let template: { id: string; name: string; imageUrl: string; prompt: string | null } | null = null;
+      let promptOption: { id: string; name: string; prompt: string } | null = null;
       if (submission.templateUsed) {
         template = await this.prisma.template.findUnique({
           where: { id: submission.templateUsed },
@@ -130,20 +136,61 @@ export class ProcessingWorker extends WorkerHost {
         } else {
           this.logger.warn(`Submission ${submissionId} references template ${submission.templateUsed}, but it no longer exists`);
         }
+      } else if (submission.promptOptionId) {
+        // No reference image for this mode — referenceImageBuffer stays
+        // undefined, so GeminiProvider.generate() sends only the booth photo
+        // (1 image part) instead of [reference, photo] (2 image parts).
+        promptOption = await this.prisma.promptOption.findUnique({
+          where: { id: submission.promptOptionId },
+          select: { id: true, name: true, prompt: true },
+        });
+        if (promptOption) {
+          this.logger.log(`Submission ${submissionId} using prompt option "${promptOption.name}" (${promptOption.id}) — no reference image, prompt-only generation`);
+        } else {
+          this.logger.warn(`Submission ${submissionId} references prompt option ${submission.promptOptionId}, but it no longer exists`);
+        }
       }
-      const effectiveAiConfig = { ...aiConfig, prompt: template?.prompt || aiConfig.prompt };
+
+      // The campaign-level "Other" choice — same no-reference-image
+      // treatment as a PromptOption, but the prompt comes from substituting
+      // submission.customInput into aiConfig.customInput.promptTemplate
+      // rather than a PromptOption row. Re-resolved here independently of
+      // SubmissionsService's own resolution at creation time, same as
+      // template.prompt/promptOption.prompt above.
+      let customInputPrompt: string | null = null;
+      if (!submission.templateUsed && !submission.promptOptionId && submission.customInput) {
+        const customInputConfig = (aiConfig.customInput as any) || {};
+        if (customInputConfig.promptTemplate) {
+          customInputPrompt = buildCustomPrompt(customInputConfig.promptTemplate, submission.customInput);
+          this.logger.log(`Submission ${submissionId} using custom input "${submission.customInput}" — no reference image, prompt-only generation`);
+        } else {
+          this.logger.warn(`Submission ${submissionId} has customInput but campaign ${campaign.slug} no longer has a customInput.promptTemplate configured`);
+        }
+      }
+
+      const effectiveAiConfig = {
+        ...aiConfig,
+        prompt: template?.prompt || promptOption?.prompt || customInputPrompt || aiConfig.prompt,
+      };
 
       // submission.promptUsed is only written to the DB once generation
       // finishes (see aiMeta below and the update() call further down) — the
       // submission loaded at the top of process() is from before that, so it
       // reads NOT SET here every time. Not a bug — logged anyway since it's
       // useful to see that explicitly rather than silently omit it.
-      console.log('\n========== PROMPT DEBUG ==========');
-      console.log('submission.promptUsed:', submission.promptUsed || 'NOT SET');
-      console.log('aiConfig.prompt:', aiConfig?.prompt || 'NOT SET');
-      console.log('template.prompt (if any):', template?.prompt || (template as any)?.aiPrompt || 'NOT SET');
-      console.log('FINAL prompt being sent:', effectiveAiConfig.prompt);
-      console.log('==================================\n');
+      if (this.isDebug) {
+        console.log('\n========== PROMPT DEBUG ==========');
+        console.log('submission.promptUsed:', submission.promptUsed || 'NOT SET');
+        console.log('aiConfig.prompt:', aiConfig?.prompt || 'NOT SET');
+        console.log('template.prompt (if any):', template?.prompt || (template as any)?.aiPrompt || 'NOT SET');
+        console.log('promptOption (if any):', promptOption ? `"${promptOption.name}" (${promptOption.id})` : 'NOT SET');
+        console.log('promptOption.prompt (if any):', promptOption?.prompt || 'NOT SET');
+        console.log('submission.customInput (if any):', submission.customInput || 'NOT SET');
+        console.log('customInputPrompt (resolved, if any):', customInputPrompt || 'NOT SET');
+        console.log('reference image being sent:', referenceImageBuffer ? 'YES (template mode, 2 images)' : 'NO (prompt-option or default mode, 1 image)');
+        console.log('FINAL prompt being sent:', effectiveAiConfig.prompt);
+        console.log('==================================\n');
+      }
 
       // ProcessingService.generate() resolves a key internally (via
       // AiProvidersService.getKeyWithFailover(), or a specific keyChain if
@@ -199,14 +246,14 @@ export class ProcessingWorker extends WorkerHost {
     this.websocketGateway.notifyJobStatusUpdate(submissionId, campaign.slug, { status: 'PROCESSING', progress: 85 });
     await job.updateProgress(85);
 
-    const qrConfig = campaign.qrConfig as any;
-    const qrResult = await this.deliveryService.generateQRCode(submissionId, campaign.slug, qrConfig);
-    if (qrResult.qrCodeUrl && qrConfig?.embedInImage) {
-      const qrBuffer = await this.loadOutput(qrResult.qrCodeUrl);
+    const deliveryConfig = this.deliveryService.resolveDeliveryConfig(campaign);
+    const deliveryResult = await this.deliveryService.generateDelivery(submissionId, campaign);
+    if (deliveryResult.qrCodeUrl && deliveryConfig.qrCode?.embedInImage) {
+      const qrBuffer = await this.loadOutput(deliveryResult.qrCodeUrl);
       const embedded = await this.deliveryService.embedQRInImage(
         resultBuffer,
         qrBuffer,
-        qrConfig,
+        deliveryConfig.qrCode,
         photoSettings.outputWidth || 1080,
         photoSettings.outputHeight || 1920,
       );
@@ -216,6 +263,11 @@ export class ProcessingWorker extends WorkerHost {
     await job.updateProgress(95);
 
     const processingTime = Date.now() - startedAt;
+    this.logger.log(`[QUALITY] Pipeline complete for ${submissionId} (${submission.mode}) in ${processingTime}ms:`);
+    this.logger.log(
+      `[QUALITY]   original upload → ${submission.mode === 'non-ai' ? 'background/frame/props' : 'AI generation'} → post-processed → saved as ${resultUrl}` +
+        (thumbnailUrl ? `, thumbnail ${thumbnailUrl}` : ''),
+    );
     await this.prisma.submission.update({
       where: { id: submissionId },
       data: {
@@ -239,9 +291,14 @@ export class ProcessingWorker extends WorkerHost {
       status: 'COMPLETED',
       progress: 100,
       resultUrl: resultUrl.startsWith('http') ? resultUrl : `/uploads/${resultUrl}`,
-      qrCodeUrl: qrResult.qrCodeUrl ? (qrResult.qrCodeUrl.startsWith('http') ? qrResult.qrCodeUrl : `/uploads/${qrResult.qrCodeUrl}`) : undefined,
-      downloadUrl: qrResult.downloadUrl || undefined,
-      downloadCode: qrResult.downloadUrl ? qrResult.downloadUrl.split('/').pop() : undefined,
+      qrCodeUrl: deliveryResult.qrCodeUrl
+        ? deliveryResult.qrCodeUrl.startsWith('http')
+          ? deliveryResult.qrCodeUrl
+          : `/uploads/${deliveryResult.qrCodeUrl}`
+        : undefined,
+      downloadUrl: deliveryResult.downloadUrl || undefined,
+      downloadCode: deliveryResult.downloadCode || undefined,
+      displayCode: deliveryResult.displayCode || undefined,
       processingTime,
     });
     await job.updateProgress(100);
@@ -278,6 +335,33 @@ export class ProcessingWorker extends WorkerHost {
     });
   }
 
+  // iPhones (and some Android cameras) store photos with an EXIF Orientation
+  // tag instead of actually rotating the pixel data — the sensor always
+  // captures landscape, and the tag says how a viewer should rotate it for
+  // display. SubmissionsService stores the original exactly as uploaded (no
+  // re-encode, to preserve quality), so that tag is still sitting unread on
+  // whatever comes back from loadOriginal(). Both downstream pipelines
+  // (background removal/compositing in ImageService, and the raw bytes sent
+  // to the AI provider as base64) work on decoded pixels with no knowledge
+  // of EXIF, so left alone a portrait iPhone photo can come out sideways or
+  // upside down in the final result. Only re-encodes when an orientation tag
+  // is actually present and non-default, so the common case (already-normal
+  // pixels — most non-iPhone cameras, screenshots, previously-edited photos)
+  // never pays a re-encode cost.
+  private async normalizeOrientation(buffer: Buffer): Promise<Buffer> {
+    try {
+      const metadata = await sharp(buffer).metadata();
+      if (!metadata.orientation || metadata.orientation === 1) {
+        return buffer;
+      }
+      this.logger.log(`Normalizing EXIF orientation ${metadata.orientation} before processing`);
+      return await sharp(buffer).rotate().jpeg({ quality: 100, mozjpeg: true }).toBuffer();
+    } catch (err: any) {
+      this.logger.warn(`EXIF orientation check failed, using original buffer: ${err.message}`);
+      return buffer;
+    }
+  }
+
   // Submission originals never get the "/uploads/" prefix asset images do
   // (see SubmissionsService.submitPhoto's comment) — bare relative path in
   // local dev, S3 key when configured.
@@ -289,7 +373,7 @@ export class ProcessingWorker extends WorkerHost {
   }
 
   // Outputs (results/thumbnails/QR codes) follow the same convention as
-  // DeliveryService.generateQRCode's own saves.
+  // DeliveryService.generateDelivery's own saves.
   private async loadOutput(url: string): Promise<Buffer> {
     if (this.storage.isConfigured()) {
       return this.storage.download(url);

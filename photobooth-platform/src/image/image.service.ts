@@ -75,11 +75,18 @@ export class ImageService {
       }
     }
 
-    // Step 6: Final quality optimization
+    // Step 6: Final encode. PNG is lossless regardless of compressionLevel
+    // (that option only trades encode speed for file size, never quality) —
+    // a lower level here just means less aggressive compression for a
+    // smaller speed/size tradeoff.
     currentImage = await sharp(currentImage)
-      .png({ quality: 90, compressionLevel: 6 })
+      .png({ compressionLevel: 3 })
       .toBuffer();
 
+    const finalMeta = await sharp(currentImage).metadata().catch(() => null);
+    this.logger.log(
+      `[QUALITY] Final output: ${finalMeta ? `${finalMeta.width}x${finalMeta.height}` : 'dimensions unknown'}, ${(currentImage.length / 1024).toFixed(0)}KB, format: ${finalMeta?.format || 'png'}`,
+    );
     this.logger.log(`Post-processing complete: ${(currentImage.length / 1024).toFixed(0)}KB`);
 
     return { resultBuffer: currentImage, mimeType: 'image/png' };

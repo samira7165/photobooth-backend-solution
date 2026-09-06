@@ -146,16 +146,34 @@ export class DeveloperKeysService {
     return result;
   }
 
-  // validateKey() already incremented usageToday as part of authenticating
-  // this request, so "over the limit" means this request itself pushed the
-  // count past rateLimit, not that the next one would.
+  // Per-key per-minute abuse throttle — deliberately independent of
+  // usageToday (a daily analytics counter only, reset once at midnight by
+  // resetDailyUsage above, never used to gate a request). This used to
+  // compare usageToday against rateLimit directly, which meant "requests
+  // per minute" (rateLimit's actual documented meaning — see the field
+  // comment in schema.prisma) was silently enforced as a lifetime-per-day
+  // cap instead: a client polling every few seconds burns through the
+  // default 60 within minutes and then gets a 429 on every request until
+  // the once-a-day cron resets it, with no way to recover sooner.
+  //
+  // Fixed 60-second window per key, in Redis: INCR bumps the count; EXPIRE
+  // is only set on the very first request of a fresh window (count === 1,
+  // i.e. the key had no TTL yet) so the window doesn't keep sliding forward
+  // on every subsequent request within it.
   async checkRateLimit(keyId: string): Promise<boolean> {
     const key = await this.prisma.developerApiKey.findUnique({
       where: { id: keyId },
-      select: { usageToday: true, rateLimit: true },
+      select: { rateLimit: true },
     });
     if (!key) return false;
-    return key.usageToday <= key.rateLimit;
+    if (!key.rateLimit) return true; // no limit configured for this key
+
+    const redisKey = `devkey:ratelimit:${keyId}`;
+    const count = await this.redis.incr(redisKey);
+    if (count === 1) {
+      await this.redis.expire(redisKey, 60);
+    }
+    return count <= key.rateLimit;
   }
 
   // Browsers never send the actual x-api-key value on a CORS preflight

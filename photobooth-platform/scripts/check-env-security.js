@@ -22,6 +22,9 @@ function loadEnv() {
   return env;
 }
 
+// Kept in sync with PLACEHOLDER_PATTERNS in src/main.ts's boot-time check.
+const PLACEHOLDER_PATTERNS = ['change-this', 'change-in-production', 'your-super-secret', 'xri-photobooth-encryption'];
+
 function checkSecret(name, value, minLength) {
   if (!value) {
     console.warn(`⚠️  ${name} is missing.`);
@@ -32,8 +35,8 @@ function checkSecret(name, value, minLength) {
     console.warn(`⚠️  ${name} is only ${value.length} chars — should be at least ${minLength}.`);
     ok = false;
   }
-  if (value.includes('change-this')) {
-    console.warn(`⚠️  ${name} still contains the default placeholder text — rotate it before production.`);
+  if (PLACEHOLDER_PATTERNS.some((p) => value.includes(p))) {
+    console.warn(`⚠️  ${name} still contains default placeholder text — rotate it before production.`);
     ok = false;
   }
   if (ok) console.log(`✅ ${name} looks reasonable (${value.length} chars, no placeholder text).`);

@@ -7,13 +7,14 @@ import DashboardLayout from '@/components/DashboardLayout';
 import StatusBadge from '@/components/StatusBadge';
 import Modal from '@/components/Modal';
 import AssetsTab from '@/components/AssetsTab';
+import PromptOptionsTab from '@/components/PromptOptionsTab';
 import SubmissionsTab from '@/components/SubmissionsTab';
 import useCurrentUser from '@/lib/useCurrentUser';
 import { hasRole, CAMPAIGN_STATUS_TRANSITIONS, formatDate, COLLECT_FIELD_OPTIONS } from '@/lib/utils';
 import AiModelConfigSection, { flattenProviderKeys, keyLabel, countAllKeys } from '@/components/AiModelConfigSection';
 import { EnabledAssetGrid } from '@/components/StagedAssetSection';
 
-const TABS = ['Overview', 'Assets', 'Submissions'];
+const TABS = ['Overview', 'Assets', 'Prompt Options', 'Submissions'];
 
 const STATUS_ACTION_LABELS = {
   ACTIVE: 'Activate',
@@ -214,6 +215,9 @@ export default function CampaignDetailPage() {
 
       {tab === 'Overview' && <OverviewTab campaign={campaign} />}
       {tab === 'Assets' && <AssetsTab campaignId={campaign.id} canManage={canManage} />}
+      {tab === 'Prompt Options' && (
+        <PromptOptionsTab campaignId={campaign.id} canManage={canManage} campaign={campaign} onCampaignUpdated={load} />
+      )}
       {tab === 'Submissions' && <SubmissionsTab campaignId={campaign.id} canManage={canManage} />}
 
       <EditCampaignModal
@@ -459,6 +463,15 @@ function EditCampaignModal({ open, onClose, campaign, onSaved }) {
             keyChain: chain,
             fallbackProviders: chain.map((id) => aiKeys.find((k) => k.id === id)?.providerName).filter(Boolean),
             templatesEnabled,
+            // Prompt Options / "Other" custom input are owned entirely by
+            // PromptOptionsTab now (its own PATCH call) — this modal only
+            // owns the AI Templates toggle, so it passes promptMode/
+            // customInput through untouched except for folding in whatever
+            // this checkbox just changed.
+            promptMode: templatesEnabled
+              ? (campaign.aiConfig?.promptMode === 'prompt-option' || campaign.aiConfig?.promptMode === 'both' ? 'both' : 'template')
+              : (campaign.aiConfig?.promptMode === 'prompt-option' || campaign.aiConfig?.promptMode === 'both' ? 'prompt-option' : 'template'),
+            customInput: campaign.aiConfig?.customInput || { enabled: false },
           },
         }),
       });
@@ -571,6 +584,13 @@ function EditCampaignModal({ open, onClose, campaign, onSaved }) {
               canManage
             />
           </div>
+        )}
+
+        {aiModeSelected && (
+          <p className="text-xs text-gray-500 border-t border-white/10 pt-4">
+            Prompt Options and the &quot;Other&quot; custom-input toggle now live entirely on the{' '}
+            <span className="text-gray-300">Prompt Options</span> tab, alongside the options themselves.
+          </p>
         )}
 
         <div>

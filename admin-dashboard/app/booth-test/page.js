@@ -29,6 +29,12 @@ export default function BoothTestPage() {
   const [frameId, setFrameId] = useState('');
   const [propIds, setPropIds] = useState([]);
   const [templateId, setTemplateId] = useState('');
+  const [promptOptionId, setPromptOptionId] = useState('');
+  // Whether the "Other" tile is the current selection — distinct from
+  // customInputText itself so the input box only shows once "Other" is
+  // actually picked, matching how a real booth would reveal it.
+  const [customInputMode, setCustomInputMode] = useState(false);
+  const [customInputText, setCustomInputText] = useState('');
 
   const [formFields, setFormFields] = useState({ userName: '', userPhone: '', userEmail: '' });
   const [submitError, setSubmitError] = useState('');
@@ -242,14 +248,17 @@ export default function BoothTestPage() {
   const showFramePicker = boothConfig?.frameConfig?.enabled && (boothConfig?.frames?.length || 0) > 0;
   const showPropPicker = boothConfig?.propConfig?.enabled && (boothConfig?.props?.length || 0) > 0;
   const showTemplatePicker = (boothConfig?.templates?.length || 0) > 0;
+  const showPromptOptionPicker = (boothConfig?.promptOptions?.length || 0) > 0 || !!boothConfig?.customInput?.enabled;
 
   // Steps are numbered dynamically since which optional sections appear
-  // (background/frame/prop/template pickers, required-info fields) depends
-  // on this campaign's config. Order: campaign -> required info (name/id) ->
-  // template style -> photo capture -> background/frame/prop -> submit.
+  // (background/frame/prop/template/prompt-option pickers, required-info
+  // fields) depends on this campaign's config. Order: campaign -> required
+  // info (name/id) -> template style -> prompt option -> photo capture ->
+  // background/frame/prop -> submit.
   let stepCounter = 1; // "Choose a campaign" is always step 1
   const fieldsStep = collectFields.length > 0 ? ++stepCounter : null;
   const templateStep = showTemplatePicker ? ++stepCounter : null;
+  const promptOptionStep = showPromptOptionPicker ? ++stepCounter : null;
   const photoStep = ++stepCounter;
   const backgroundStep = showBackgroundPicker ? ++stepCounter : null;
   const frameStep = showFramePicker ? ++stepCounter : null;
@@ -285,6 +294,13 @@ export default function BoothTestPage() {
       if (frameId) fd.append('frameId', frameId);
       propIds.forEach((id) => fd.append('propIds', id));
       if (templateId) fd.append('templateId', templateId);
+      // Mutually exclusive — SubmissionsService.submitPhoto rejects a
+      // request sending both promptOptionId and customInput.
+      if (customInputMode) {
+        if (customInputText.trim()) fd.append('customInput', customInputText.trim());
+      } else if (promptOptionId) {
+        fd.append('promptOptionId', promptOptionId);
+      }
       fd.append('photo', photoBlob, 'test-photo.jpg');
 
       const res = await api.post(`/submissions/booth/${campaignSlug}/submit`, fd, {
@@ -333,6 +349,9 @@ export default function BoothTestPage() {
     setFrameId('');
     setPropIds([]);
     setTemplateId('');
+    setPromptOptionId('');
+    setCustomInputMode(false);
+    setCustomInputText('');
   };
 
   return (
@@ -420,6 +439,74 @@ export default function BoothTestPage() {
                     </button>
                   ))}
                 </div>
+              </Section>
+            )}
+
+            {showPromptOptionPicker && (
+              <Section step={promptOptionStep} title="What do you want to be? (which one do you want?)">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  {boothConfig.promptOptions.map((opt) => (
+                    <button
+                      type="button"
+                      key={opt.id}
+                      onClick={() => {
+                        setCustomInputMode(false);
+                        setPromptOptionId(opt.id === promptOptionId ? '' : opt.id);
+                      }}
+                      className={`rounded-lg border-2 overflow-hidden text-left ${
+                        !customInputMode && promptOptionId === opt.id ? 'border-[#2563eb]' : 'border-white/10 hover:border-white/30'
+                      }`}
+                    >
+                      <div className="aspect-square bg-[#0a0a0a] flex items-center justify-center">
+                        {opt.thumbnailUrl ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={resolveImageUrl(opt.thumbnailUrl)}
+                            alt={opt.name}
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <span className="text-gray-600 text-xs px-2 text-center">{opt.name}</span>
+                        )}
+                      </div>
+                      <div className="px-2 py-1.5">
+                        <div className="text-xs text-white truncate">{opt.name}</div>
+                        {opt.description && <div className="text-[10px] text-gray-500 truncate">{opt.description}</div>}
+                      </div>
+                    </button>
+                  ))}
+
+                  {boothConfig.customInput?.enabled && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPromptOptionId('');
+                        setCustomInputMode(true);
+                      }}
+                      className={`rounded-lg border-2 overflow-hidden text-left ${
+                        customInputMode ? 'border-[#2563eb]' : 'border-white/10 hover:border-white/30'
+                      }`}
+                    >
+                      <div className="aspect-square bg-[#0a0a0a] flex items-center justify-center">
+                        <span className="text-gray-500 text-2xl">+</span>
+                      </div>
+                      <div className="px-2 py-1.5 text-xs text-white truncate">Other</div>
+                    </button>
+                  )}
+                </div>
+
+                {customInputMode && (
+                  <div className="mt-3">
+                    <Field
+                      label={boothConfig.customInput?.label || 'Type your own...'}
+                      value={customInputText}
+                      onChange={(v) => setCustomInputText(v.slice(0, boothConfig.customInput?.maxLength || 50))}
+                    />
+                    <p className="text-[10px] text-gray-500 mt-1">
+                      {customInputText.length}/{boothConfig.customInput?.maxLength || 50}
+                    </p>
+                  </div>
+                )}
               </Section>
             )}
 

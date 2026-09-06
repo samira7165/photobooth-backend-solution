@@ -1,5 +1,5 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { join } from 'path';
 import { json, urlencoded } from 'express';
@@ -10,7 +10,15 @@ import cors, { CorsOptionsDelegate } from 'cors';
 import { DeveloperKeysService } from './developer-keys/developer-keys.service';
 import { CorsService } from './common/services/cors.service';
 
+// Every default value these secrets ship with across .env.example, the
+// seed-era .env, and older placeholder text — kept as substrings (not exact
+// matches) since e.g. JWT_SECRET's actual default embeds "change-this" inside
+// a longer string. scripts/check-env-security.js mirrors this same list for
+// its standalone/CI audit; keep the two in sync.
+const PLACEHOLDER_PATTERNS = ['change-this', 'change-in-production', 'your-super-secret', 'xri-photobooth-encryption'];
+
 async function bootstrap() {
+  const logger = new Logger('Bootstrap');
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
   // Security headers. crossOriginResourcePolicy defaults to 'same-origin',
@@ -42,12 +50,6 @@ async function bootstrap() {
   // own limit via MAX_FILE_SIZE (see assets.module.ts / submissions.module.ts).
   app.use(json({ limit: '10mb' }));
   app.use(urlencoded({ extended: true, limit: '10mb' }));
-
-  // Serve uploaded asset files — e.g. http://localhost:3000/uploads/campaigns/...
-  // Note: this is NOT affected by setGlobalPrefix() below, since static-asset
-  // middleware sits outside Nest's controller routing. So local files live at
-  // /uploads/... directly, without the /api/v1 prefix every controller route gets.
-  app.useStaticAssets(join(process.cwd(), 'uploads'), { prefix: '/uploads/' });
 
   // Validate & transform incoming DTOs, strip unknown properties
   app.useGlobalPipes(
@@ -161,6 +163,21 @@ async function bootstrap() {
 
   app.use(cors(corsOptionsDelegate));
 
+  // Serve uploaded asset files — e.g. http://localhost:3000/uploads/campaigns/...
+  // Note: this is NOT affected by setGlobalPrefix() below, since static-asset
+  // middleware sits outside Nest's controller routing. So local files live at
+  // /uploads/... directly, without the /api/v1 prefix every controller route gets.
+  // Registered AFTER cors() (not before, as it originally was) — Express/Connect
+  // middleware runs in registration order, and static-asset middleware fully
+  // handles a matching request itself; anything registered later than it never
+  // runs for that request at all. Registered before, /uploads/* responses were
+  // silently missing CORS headers entirely (an admin-dashboard `fetch()` of a
+  // result image — e.g. to build a downloadable Blob — would be blocked by the
+  // browser even though the exact same file loads fine in an <img> tag, since
+  // <img> only needs the Cross-Origin-Resource-Policy header above, not CORS)
+  // and skipping the rate limiter below too.
+  app.useStaticAssets(join(process.cwd(), 'uploads'), { prefix: '/uploads/' });
+
   // Global rate limiting
   app.use(
     rateLimit({
@@ -177,19 +194,20 @@ async function bootstrap() {
   // Global prefix — all routes start with /api/v1
   app.setGlobalPrefix('api/v1');
 
-  // Dev-only sanity check on the secrets used to sign tokens / encrypt API
-  // keys at rest — warns, never blocks startup. A fuller audit (including
-  // whether any user is still on the seeded default password) lives in
-  // scripts/check-env-security.js, meant to be run manually/in CI.
-  if (process.env.NODE_ENV === 'development') {
-    if (!process.env.JWT_SECRET || process.env.JWT_SECRET.includes('change-this')) {
-      console.warn('⚠️  WARNING: JWT_SECRET is still using the default placeholder. Change before production!');
-    }
-    if (!process.env.JWT_REFRESH_SECRET || process.env.JWT_REFRESH_SECRET.includes('change-this')) {
-      console.warn('⚠️  WARNING: JWT_REFRESH_SECRET is still using the default placeholder. Change before production!');
-    }
-    if (!process.env.ENCRYPTION_SECRET || process.env.ENCRYPTION_SECRET.includes('change-this')) {
-      console.warn('⚠️  WARNING: ENCRYPTION_SECRET is missing or using a placeholder. API keys are not properly secured!');
+  // Sanity check on the secrets used to sign tokens / encrypt API keys at
+  // rest — warns, never blocks startup. Runs in every environment (not just
+  // dev): a placeholder secret is most dangerous exactly where this would
+  // previously have stayed silent — a production boot. A fuller audit
+  // (including whether any user is still on the seeded default password)
+  // lives in scripts/check-env-security.js, meant to be run manually/in CI.
+  const secrets = {
+    JWT_SECRET: process.env.JWT_SECRET,
+    JWT_REFRESH_SECRET: process.env.JWT_REFRESH_SECRET,
+    ENCRYPTION_SECRET: process.env.ENCRYPTION_SECRET,
+  };
+  for (const [name, value] of Object.entries(secrets)) {
+    if (!value || PLACEHOLDER_PATTERNS.some((p) => value.includes(p))) {
+      logger.warn(`⚠️  ${name} is still using a placeholder value! Run: node scripts/generate-secrets.js`);
     }
   }
 

@@ -70,6 +70,21 @@ export class CreateCampaignDto {
     customContent?: string;
   };
 
+  // Superset of qrConfig above — see the field comment on the Campaign model
+  // in schema.prisma. The specific business rules (prefix format, codeLength
+  // range, expiryHours range) are enforced in CampaignsService, not here —
+  // same shallow-@IsObject() convention every other JSON config field above
+  // already uses; class-validator's nested-object support isn't worth
+  // fighting for one deeply-optional field.
+  @IsOptional()
+  @IsObject()
+  deliveryConfig?: {
+    qrCode?: { enabled?: boolean; position?: { x: number; y: number }; size?: number; contentType?: string; customContent?: string; embedInImage?: boolean };
+    shortCode?: { enabled?: boolean; prefix?: string; codeLength?: number };
+    directLink?: { enabled?: boolean; expiryHours?: number };
+    print?: { enabled?: boolean; format?: string; copies?: number };
+  };
+
   @IsOptional()
   @IsObject()
   textConfig?: {

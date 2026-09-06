@@ -9,7 +9,7 @@ import SubmissionDetailModal from '@/components/SubmissionDetailModal';
 import TableSkeleton from '@/components/TableSkeleton';
 import EmptyState from '@/components/EmptyState';
 import useCurrentUser from '@/lib/useCurrentUser';
-import { hasRole, formatDate, truncateId } from '@/lib/utils';
+import { hasRole, formatDate, truncateId, resolveImageUrl, downloadFile, printImageUrl } from '@/lib/utils';
 
 const STATUS_OPTIONS = ['All', 'UPLOADED', 'QUEUED', 'PROCESSING', 'COMPLETED', 'FAILED'];
 const PAGE_SIZE = 20;
@@ -29,6 +29,8 @@ export default function SubmissionsPage() {
   const [campaignFilter, setCampaignFilter] = useState('All');
   const [statusFilter, setStatusFilter] = useState('All');
   const [page, setPage] = useState(0);
+  const [downloadingId, setDownloadingId] = useState(null);
+  const [printingId, setPrintingId] = useState(null);
 
   useEffect(() => {
     api.get('/campaigns').then((res) => setCampaigns(res.data)).catch(() => {});
@@ -67,6 +69,44 @@ export default function SubmissionsPage() {
       alert(err.response?.data?.message || 'Retry failed');
     } finally {
       setRetrying(null);
+    }
+  };
+
+  const handleDownload = async (s, e) => {
+    e.stopPropagation();
+    setDownloadingId(s.id);
+    try {
+      await downloadFile(resolveImageUrl(s.resultUrl), `${s.id}-result.png`);
+    } catch (err) {
+      alert(err.message || 'Download failed');
+    } finally {
+      setDownloadingId(null);
+    }
+  };
+
+  // Backend is the source of truth for "already printed" — this calls
+  // PATCH /submissions/:id/print FIRST and only opens the actual browser
+  // print dialog if that claim succeeds, so a duplicate click (or someone
+  // else printing the same submission from a different browser/booth a
+  // moment earlier) can't trigger a second physical print. printImageUrl()
+  // itself has no idea whether anything was ever printed before — the
+  // recorded printStatus on the submission is what makes that true after a
+  // refresh, in a different browser, or from a different booth.
+  const handlePrint = async (s, e) => {
+    e.stopPropagation();
+    setPrintingId(s.id);
+    try {
+      const res = await api.patch(`/submissions/${s.id}/print`);
+      if (res.data.alreadyPrinted) {
+        alert(res.data.message || 'This image has already been printed.');
+      } else {
+        printImageUrl(resolveImageUrl(s.resultUrl));
+      }
+      load();
+    } catch (err) {
+      alert(err.response?.data?.message || 'Failed to record print');
+    } finally {
+      setPrintingId(null);
     }
   };
 
@@ -136,16 +176,17 @@ export default function SubmissionsPage() {
                 <th className="sticky top-0 z-10 bg-[#111111] px-5 py-3 font-medium border-b border-white/10">User</th>
                 <th className="sticky top-0 z-10 bg-[#111111] px-5 py-3 font-medium border-b border-white/10">Status</th>
                 <th className="sticky top-0 z-10 bg-[#111111] px-5 py-3 font-medium border-b border-white/10">Mode</th>
+                <th className="sticky top-0 z-10 bg-[#111111] px-5 py-3 font-medium border-b border-white/10">Code</th>
                 <th className="sticky top-0 z-10 bg-[#111111] px-5 py-3 font-medium border-b border-white/10">Created At</th>
                 <th className="sticky top-0 z-10 bg-[#111111] px-5 py-3 font-medium border-b border-white/10"></th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <TableSkeleton columns={7} widths={['w-16', 'w-32', 'w-28', 'w-20', 'w-14', 'w-36', 'w-12']} />
+                <TableSkeleton columns={8} widths={['w-16', 'w-32', 'w-28', 'w-20', 'w-14', 'w-20', 'w-36', 'w-12']} />
               ) : submissions.length === 0 ? (
                 <tr>
-                  <td colSpan={7}>
+                  <td colSpan={8}>
                     <EmptyState
                       icon={Camera}
                       title="No submissions found"
@@ -187,8 +228,36 @@ export default function SubmissionsPage() {
                       <StatusBadge status={s.status} />
                     </td>
                     <td className="px-5 py-3 text-gray-300">{s.mode}</td>
+                    <td className="px-5 py-3 font-mono text-xs text-gray-400">{s.displayCode || s.downloadCode || '—'}</td>
                     <td className="px-5 py-3 text-gray-400">{formatDate(s.createdAt)}</td>
                     <td className="px-5 py-3 text-right space-x-2 whitespace-nowrap">
+                      {s.status === 'COMPLETED' && s.resultUrl && (
+                        <>
+                          <button
+                            onClick={(e) => handleDownload(s, e)}
+                            disabled={downloadingId === s.id}
+                            className="text-xs border border-white/10 hover:bg-white/5 disabled:opacity-50 text-gray-300 rounded-lg px-2.5 py-1 transition-colors"
+                          >
+                            {downloadingId === s.id ? 'Downloading…' : 'Download'}
+                          </button>
+                          {s.printStatus === 'PRINTED' ? (
+                            <span
+                              title={s.printedAt ? `Printed ${formatDate(s.printedAt)}` : undefined}
+                              className="text-xs text-gray-500 border border-white/10 rounded-lg px-2.5 py-1 inline-block cursor-default"
+                            >
+                              Already Printed
+                            </span>
+                          ) : (
+                            <button
+                              onClick={(e) => handlePrint(s, e)}
+                              disabled={printingId === s.id}
+                              className="text-xs border border-white/10 hover:bg-white/5 disabled:opacity-50 text-gray-300 rounded-lg px-2.5 py-1 transition-colors"
+                            >
+                              {printingId === s.id ? 'Printing…' : 'Print'}
+                            </button>
+                          )}
+                        </>
+                      )}
                       {canManage && s.status === 'FAILED' && (
                         <button
                           onClick={(e) => handleRetry(s.id, e)}

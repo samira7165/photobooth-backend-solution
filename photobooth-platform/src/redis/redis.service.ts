@@ -1,10 +1,12 @@
-import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
 
 // Connects to Redis on app start, disconnects on shutdown
 @Injectable()
 export class RedisService extends Redis implements OnModuleInit, OnModuleDestroy {
+  private logger = new Logger(RedisService.name);
+
   constructor(private readonly configService: ConfigService) {
     super({
       host: configService.get<string>('REDIS_HOST', 'localhost'),
@@ -16,11 +18,11 @@ export class RedisService extends Redis implements OnModuleInit, OnModuleDestroy
 
   async onModuleInit() {
     await this.connect();
-    console.log('Redis connected');
+    this.logger.log('Redis connected');
   }
 
   async onModuleDestroy() {
     this.disconnect();
-    console.log('Redis disconnected');
+    this.logger.log('Redis disconnected');
   }
 }

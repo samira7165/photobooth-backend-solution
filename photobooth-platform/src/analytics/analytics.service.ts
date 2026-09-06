@@ -1,12 +1,31 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
+import { StorageService } from '../storage/storage.service';
 import { AnalyticsQueryDto } from './dto/analytics-query.dto';
 
 @Injectable()
 export class AnalyticsService {
   private logger = new Logger(AnalyticsService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private storage: StorageService,
+    private config: ConfigService,
+  ) {}
+
+  // No dedicated "this backend's own bare origin" env var exists (only
+  // PUBLIC_API_URL, which already has "/api/v1/public" appended) — derive it
+  // by stripping that suffix, since /uploads/... is served from the same
+  // origin one level up. Only needed for local-disk mode; S3 mode's
+  // resolveUrl() already returns a full presigned https:// URL.
+  private resolveLocalOrigin(): string {
+    const publicApiUrl = this.config.get<string>('PUBLIC_API_URL');
+    if (publicApiUrl) {
+      return publicApiUrl.replace(/\/api\/v1\/public\/?$/, '');
+    }
+    return 'http://localhost:3000';
+  }
 
   // ─── DASHBOARD OVERVIEW STATS ───
 
@@ -278,6 +297,8 @@ export class AnalyticsService {
       { header: 'AI Model', key: 'aiModel', width: 20 },
       { header: 'Processing Time (ms)', key: 'processingTime', width: 18 },
       { header: 'Download Code', key: 'downloadCode', width: 15 },
+      { header: 'Display Code', key: 'displayCode', width: 18 },
+      { header: 'Photo', key: 'photoUrl', width: 45 },
       { header: 'Downloads', key: 'downloadCount', width: 12 },
       { header: 'Retry Count', key: 'retryCount', width: 12 },
       { header: 'Error', key: 'errorMessage', width: 30 },
@@ -292,7 +313,15 @@ export class AnalyticsService {
       fgColor: { argb: 'FF1A5276' },
     };
 
-    for (const sub of submissions) {
+    // Resolved in parallel up front — resultUrl is a bare storage key (S3 key
+    // or local relative path), not something Excel/a browser can load
+    // directly; a submission with no result yet (FAILED/still processing)
+    // resolves to null, same as everywhere else this pattern is used
+    // (SubmissionsService.attachDisplayUrls, DeliveryService).
+    const photoUrls = await Promise.all(submissions.map((sub) => this.storage.resolveUrl(sub.resultUrl)));
+
+    submissions.forEach((sub, i) => {
+      const photoUrl = photoUrls[i];
       sheet.addRow({
         id: sub.id.substring(0, 8),
         campaign: sub.campaign?.name || '—',
@@ -305,12 +334,22 @@ export class AnalyticsService {
         aiModel: sub.aiModel || '—',
         processingTime: sub.processingTime || 0,
         downloadCode: sub.downloadCode || '—',
+        displayCode: sub.displayCode || sub.downloadCode || '—',
+        // A real hyperlink cell (not just a text URL) — clickable straight
+        // from Excel/Google Sheets. Local-disk resolveUrl() returns a
+        // root-relative "/uploads/..." path, which isn't openable outside
+        // this server, so prefix it with PUBLIC_API_URL's origin (falling
+        // back to ADMIN_URL's port 3000 convention) to make it a real
+        // absolute link either way.
+        photoUrl: photoUrl
+          ? { text: 'View Photo', hyperlink: photoUrl.startsWith('http') ? photoUrl : `${this.resolveLocalOrigin()}${photoUrl}` }
+          : '—',
         downloadCount: sub.downloadCount,
         retryCount: sub.retryCount,
         errorMessage: sub.errorMessage || '—',
         createdAt: sub.createdAt.toISOString(),
       });
-    }
+    });
 
     // Color code status cells
     sheet.eachRow((row, rowNumber) => {

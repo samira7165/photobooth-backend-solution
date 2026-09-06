@@ -4,6 +4,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { Throttle } from '@nestjs/throttler';
 import { SubmissionsService } from './submissions.service';
 import { CreateSubmissionDto } from './dto/create-submission.dto';
+import { PrintSubmissionDto } from './dto/print-submission.dto';
 import { Public } from '../common/decorators/public.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -83,6 +84,16 @@ export class SubmissionsController {
   @Roles('ADMIN')
   async retry(@Param('id') id: string) {
     return this.submissionsService.retrySubmission(id);
+  }
+
+  // See SubmissionsService.print() — records that this submission's result
+  // was physically printed, idempotently (a second call reports
+  // alreadyPrinted rather than silently "succeeding" twice).
+  @Patch(':id/print')
+  @UseGuards(RolesGuard)
+  @Roles('ADMIN')
+  async print(@Param('id') id: string, @Body() dto: PrintSubmissionDto) {
+    return this.submissionsService.print(id, dto?.printerId);
   }
 
   @Delete(':id')

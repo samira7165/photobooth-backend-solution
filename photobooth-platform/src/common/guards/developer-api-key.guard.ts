@@ -53,7 +53,14 @@ export class DeveloperApiKeyGuard implements CanActivate {
     }
 
     const origin = request.headers.origin;
-    if (!this.developerKeysService.checkOrigin(keyRecord, origin)) {
+    // Same dev convenience main.ts's admin/booth CORS delegate already
+    // gives itself (`isDev && origin.startsWith('http://localhost:')`) —
+    // without it, testing a public-api integration locally means either
+    // hand-adding every dev port to the key's allowedOrigins or disabling
+    // this check outright. Production is unaffected: NODE_ENV must not be
+    // 'production' for this branch to ever apply.
+    const isLocalhostDev = process.env.NODE_ENV !== 'production' && origin?.startsWith('http://localhost:');
+    if (!isLocalhostDev && !this.developerKeysService.checkOrigin(keyRecord, origin)) {
       throw new ForbiddenException(`Origin "${origin}" is not allowed for this API key.`);
     }
 

@@ -11,6 +11,7 @@ import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { CampaignsModule } from './campaigns/campaigns.module';
 import { AssetsModule } from './assets/assets.module';
+import { PromptOptionsModule } from './prompt-options/prompt-options.module';
 import { AiProvidersModule } from './ai-providers/ai-providers.module';
 import { StorageModule } from './storage/storage.module';
 import { WebsocketModule } from './websocket/websocket.module';
@@ -55,6 +56,7 @@ import { CommonModule } from './common/common.module';
     UsersModule,
     CampaignsModule,
     AssetsModule,
+    PromptOptionsModule,
     AiProvidersModule,
     SubmissionsModule,
     ImageModule,

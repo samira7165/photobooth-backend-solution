@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import sharp from 'sharp';
 import { AiGenerateInput, AiProvider, AiProviderResult } from './ai-provider.interface';
 
 const DEFAULT_MODEL = 'gemini-2.5-flash-image';
@@ -49,6 +50,7 @@ function closestAspectRatio(width: number, height: number): string {
 export class GeminiProvider implements AiProvider {
   name = 'gemini';
   private logger = new Logger(GeminiProvider.name);
+  private readonly isDebug = process.env.NODE_ENV !== 'production';
 
   async generate(input: AiGenerateInput): Promise<AiProviderResult> {
     const model = input.model || DEFAULT_MODEL;
@@ -62,11 +64,24 @@ export class GeminiProvider implements AiProvider {
     if (input.referenceImageBuffer) {
       requestParts.push({ inlineData: { mimeType: 'image/jpeg', data: input.referenceImageBuffer.toString('base64') } });
       this.logger.log(`[IMAGE 1/2] Reference/style image attached — ${input.referenceImageBuffer.length} bytes raw, ${Math.ceil(input.referenceImageBuffer.length / 3) * 4} base64 chars`);
+      const refMeta = await sharp(input.referenceImageBuffer).metadata().catch(() => null);
+      this.logger.log(
+        `[QUALITY] Reference image sent to AI: ${refMeta ? `${refMeta.width}x${refMeta.height}` : 'dimensions unknown'}, ${(input.referenceImageBuffer.length / 1024).toFixed(0)}KB — sent as-is, no compression applied here`,
+      );
     } else {
       this.logger.log('[IMAGE 1/2] No reference image for this submission — skipping (booth photo only)');
     }
     requestParts.push({ inlineData: { mimeType: 'image/jpeg', data: input.imageBuffer.toString('base64') } });
     this.logger.log(`[IMAGE ${input.referenceImageBuffer ? '2/2' : '1/1'}] Booth photo attached — ${input.imageBuffer.length} bytes raw, ${Math.ceil(input.imageBuffer.length / 3) * 4} base64 chars`);
+    // No compressForAI step exists in this pipeline — generationInput
+    // reaches here as whatever SubmissionsService stored (full original
+    // resolution, no re-encode). Logged here rather than faked, since
+    // that's actually better for face accuracy than compressing it would
+    // be — this line is what proves it's really happening.
+    const userMeta = await sharp(input.imageBuffer).metadata().catch(() => null);
+    this.logger.log(
+      `[QUALITY] User photo sent to AI: ${userMeta ? `${userMeta.width}x${userMeta.height}` : 'dimensions unknown'}, ${(input.imageBuffer.length / 1024).toFixed(0)}KB — full resolution, no compression applied here`,
+    );
     requestParts.push({ text: input.prompt });
 
     const imagePartCount = requestParts.filter((p) => p.inlineData).length;
@@ -83,12 +98,14 @@ export class GeminiProvider implements AiProvider {
       this.logger.log(`Requesting Gemini aspectRatio ${aspectRatio} for target ${input.outputWidth}x${input.outputHeight}`);
     }
 
-    console.log('\n========== PROMPT SENT TO GEMINI ==========');
-    console.log('Campaign prompt:', input.prompt);
-    console.log('Full text part:', JSON.stringify(body.contents[0].parts.find((p: any) => p.text)?.text || 'NO TEXT FOUND'));
-    console.log('Number of images:', body.contents[0].parts.filter((p: any) => p.inlineData).length);
-    console.log('Model:', model || 'default');
-    console.log('============================================\n');
+    if (this.isDebug) {
+      console.log('\n========== PROMPT SENT TO GEMINI ==========');
+      console.log('Campaign prompt:', input.prompt);
+      console.log('Full text part:', JSON.stringify(body.contents[0].parts.find((p: any) => p.text)?.text || 'NO TEXT FOUND'));
+      console.log('Number of images:', body.contents[0].parts.filter((p: any) => p.inlineData).length);
+      console.log('Model:', model || 'default');
+      console.log('============================================\n');
+    }
 
     const res = await fetch(`${API_BASE}/${model}:generateContent`, {
       method: 'POST',

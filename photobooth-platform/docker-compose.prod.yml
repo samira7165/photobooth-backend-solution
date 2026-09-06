@@ -1,0 +1,88 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: photobooth-api
+    ports:
+      - "3000:3000"
+    env_file: .env
+    # env_file above still has the localhost-oriented DATABASE_URL/REDIS_HOST
+    # from local dev; these override just those keys so the container talks
+    # to the mysql/redis *services* by name instead (same override pattern
+    # docker-compose.yml already uses for the dev `app` service).
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: mysql://root:${DB_PASSWORD}@mysql:3306/photobooth
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    volumes:
+      - uploads_data:/app/uploads
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: photobooth-worker
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: mysql://root:${DB_PASSWORD}@mysql:3306/photobooth
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    volumes:
+      - uploads_data:/app/uploads
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.0
+    container_name: photobooth-mysql-prod
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
+      MYSQL_DATABASE: photobooth
+    # No host port published — only api/worker (on the compose network) need
+    # to reach this; the dev docker-compose.yml still publishes 3306 for
+    # local tooling, but a production stack shouldn't expose the DB port.
+    volumes:
+      - mysql_data:/var/lib/mysql
+    command: --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: photobooth-redis-prod
+    command: redis-server --requirepass ${REDIS_PASSWORD} --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  mysql_data:
+  redis_data:
+  # Local-disk fallback for photos/outputs when S3 isn't configured
+  # (StorageService) — without this, uploads live only inside the api/worker
+  # containers' writable layers and vanish on every redeploy.
+  uploads_data:
