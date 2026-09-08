@@ -84,7 +84,15 @@ export class SubmissionsService {
     // This skips every AI/photo-specific step below — template/prompt-option
     // selection, HEIC handling, sharp decoding, ImageOptimizer validation,
     // and the processing queue — none of which apply to a video file.
-    const isVideo = dto.submissionType === 'video';
+    // dto.submissionType is the primary signal, but a client that uploads a
+    // real video Blob without setting it (or sets it inconsistently) would
+    // otherwise fall through to the image/AI pipeline undetected — the
+    // file's own mimetype/filename is checked too so that can't happen.
+    const uploadedMimeType = (file?.mimetype || '').split(';')[0].trim();
+    const isVideo =
+      dto.submissionType === 'video' ||
+      uploadedMimeType.startsWith('video/') ||
+      /\.(webm|mp4|mov|mkv)$/i.test(file?.originalname || '');
 
     // 2. Validate required collect fields
     const collectFields = (campaign.collectFields as string[]) || [];
@@ -216,10 +224,17 @@ export class SubmissionsService {
     let orientation: string;
 
     if (isVideo) {
+      // MediaRecorder's blob.type (and therefore this multipart part's
+      // Content-Type) is usually codec-qualified — e.g.
+      // "video/webm;codecs=vp8,opus" — not the bare "video/webm" a curl test
+      // would typically send. Compare only the base type so a real browser
+      // recording isn't rejected by an exact-string mismatch; the codec
+      // suffix carries no information the size/mimetype checks below need.
+      const baseMimeType = (file.mimetype || '').split(';')[0].trim();
       const allowedVideoTypes = (
         this.config.get<string>('ALLOWED_VIDEO_MIME_TYPES') || 'video/webm,video/mp4,video/quicktime,video/x-matroska'
       ).split(',');
-      if (!allowedVideoTypes.includes(file.mimetype)) {
+      if (!allowedVideoTypes.includes(baseMimeType)) {
         throw new BadRequestException('Invalid video type. Allowed: ' + allowedVideoTypes.join(', '));
       }
       const maxVideoSize = parseInt(this.config.get<string>('MAX_VIDEO_FILE_SIZE') || '', 10) || 104857600;
@@ -228,7 +243,7 @@ export class SubmissionsService {
       }
 
       photoBuffer = file.buffer;
-      photoMimeType = file.mimetype;
+      photoMimeType = baseMimeType;
       optimizedBuffer = photoBuffer;
       orientation = dto.orientation || 'portrait';
 
@@ -350,6 +365,24 @@ export class SubmissionsService {
         this.logger.warn('Orientation detection failed, defaulting: ' + err.message);
         orientation = dto.orientation || photoSettings.orientation || 'portrait';
       }
+    }
+
+    // A video's container format is only reliably known from its (already
+    // validated) mimetype — the client-supplied originalname can't be
+    // trusted for this (e.g. a stale "photo.png" left over from before video
+    // support existed would otherwise silently win below, saving real video
+    // bytes under a .png name). Overwriting photoFilename here means both
+    // the S3 upload (StorageService.upload derives its extension from this
+    // name) and the local-disk fallback below pick up the right extension
+    // from one place instead of duplicating this mapping in both.
+    if (isVideo) {
+      const videoExtensionByMimeType: Record<string, string> = {
+        'video/webm': '.webm',
+        'video/mp4': '.mp4',
+        'video/quicktime': '.mov',
+        'video/x-matroska': '.mkv',
+      };
+      photoFilename = `video${videoExtensionByMimeType[photoMimeType] || '.webm'}`;
     }
 
     // 5. Upload original photo/video. Video submissions get their own
@@ -590,10 +623,28 @@ export class SubmissionsService {
 
   // ─── ADMIN: LIST SUBMISSIONS ───
 
-  async findAll(filters?: { campaignId?: string; status?: string; limit?: number; offset?: number }) {
+  async findAll(filters?: {
+    campaignId?: string;
+    status?: string;
+    mode?: string;
+    search?: string;
+    limit?: number;
+    offset?: number;
+  }) {
     const where: any = {};
     if (filters?.campaignId) where.campaignId = filters.campaignId;
     if (filters?.status) where.status = filters.status;
+    // "video" is a real, always-set value of this same field (see
+    // submitPhoto's submissionMode) — not a separate submissionType column —
+    // so the Videos admin page filters on it directly instead of guessing
+    // from resultUrl's extension, which HEIC-style edge cases could fool.
+    if (filters?.mode) where.mode = filters.mode;
+    if (filters?.search) {
+      where.OR = [
+        { userName: { contains: filters.search } },
+        { userEmail: { contains: filters.search } },
+      ];
+    }
 
     const [submissions, total] = await Promise.all([
       this.prisma.submission.findMany({

@@ -61,12 +61,16 @@ export class SubmissionsController {
   async findAll(
     @Query('campaignId') campaignId?: string,
     @Query('status') status?: string,
+    @Query('mode') mode?: string,
+    @Query('search') search?: string,
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
   ) {
     return this.submissionsService.findAll({
       campaignId,
       status,
+      mode,
+      search,
       limit: limit ? parseInt(limit) : undefined,
       offset: offset ? parseInt(offset) : undefined,
     });

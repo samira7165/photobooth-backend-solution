@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import api from '@/lib/api';
 import Modal from './Modal';
 import StatusBadge from './StatusBadge';
-import { formatDate, resolveImageUrl, downloadFile, printImageUrl } from '@/lib/utils';
+import { formatDate, resolveImageUrl, resultExtension, downloadFile, printImageUrl } from '@/lib/utils';
 
 export default function SubmissionDetailModal({ submission, onClose }) {
   const [downloading, setDownloading] = useState(false);
@@ -26,7 +26,7 @@ export default function SubmissionDetailModal({ submission, onClose }) {
   const handleDownload = async () => {
     setDownloading(true);
     try {
-      await downloadFile(resultUrl, `${submission.id}-result.png`);
+      await downloadFile(resultUrl, `${submission.id}-result${resultExtension(submission?.resultUrl)}`);
     } catch (err) {
       alert(err.message || 'Download failed');
     } finally {

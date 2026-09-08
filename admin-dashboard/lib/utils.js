@@ -13,6 +13,17 @@ export function resolveImageUrl(url) {
   return `${API_ORIGIN}/uploads/${url}`;
 }
 
+// A photo submission's resultUrl is always .png, but a video-booth
+// submission's is .webm/.mp4/etc — hardcoding ".png" on download would save
+// a real video under a filename that lies about its content (Windows then
+// refuses to open it as a video). Matches the extension right before the
+// end of the string or a "?" so it works on both a bare local path and a
+// presigned S3 URL with a query string.
+export function resultExtension(url) {
+  const match = url?.match(/\.[a-zA-Z0-9]+(?=$|\?)/);
+  return match ? match[0] : '.png';
+}
+
 // Fetches the image into a Blob first rather than a plain `<a href download>`
 // — the `download` attribute is silently ignored by browsers for a
 // cross-origin href (the dashboard on :3001 fetching from the API on :3000,

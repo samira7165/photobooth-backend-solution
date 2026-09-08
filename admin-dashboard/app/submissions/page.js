@@ -9,7 +9,7 @@ import SubmissionDetailModal from '@/components/SubmissionDetailModal';
 import TableSkeleton from '@/components/TableSkeleton';
 import EmptyState from '@/components/EmptyState';
 import useCurrentUser from '@/lib/useCurrentUser';
-import { hasRole, formatDate, truncateId, resolveImageUrl, downloadFile, printImageUrl } from '@/lib/utils';
+import { hasRole, formatDate, truncateId, resolveImageUrl, resultExtension, downloadFile, printImageUrl } from '@/lib/utils';
 
 const STATUS_OPTIONS = ['All', 'UPLOADED', 'QUEUED', 'PROCESSING', 'COMPLETED', 'FAILED'];
 const PAGE_SIZE = 20;
@@ -76,7 +76,7 @@ export default function SubmissionsPage() {
     e.stopPropagation();
     setDownloadingId(s.id);
     try {
-      await downloadFile(resolveImageUrl(s.resultUrl), `${s.id}-result.png`);
+      await downloadFile(resolveImageUrl(s.resultUrl), `${s.id}-result${resultExtension(s.resultUrl)}`);
     } catch (err) {
       alert(err.message || 'Download failed');
     } finally {
